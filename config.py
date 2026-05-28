@@ -28,7 +28,7 @@ DETECT_REGION = (0.2, 0.1, 0.8, 0.9)
 # YOLO 模型
 MODEL_PATH = "models/yolov8n.pt"
 CONFIDENCE_THRESHOLD = 0.5
-TARGET_CLASSES = [0]  # person
+TARGET_CLASSES = [0, 1]  # 0: head, 1: body
 
 # 鼠标控制模式: "mouse" / "kmbox_net" / "kmbox_serial"
 MOUSE_MODE = "mouse"

@@ -6,10 +6,11 @@
     0.72,
     0.72
   ],
-  "MODEL_PATH": "models/yolov8s.pt",
+  "MODEL_PATH": "E:/Temp/aimbot/models/PUBGV8_320.onnx",
   "CONFIDENCE_THRESHOLD": 0.5,
   "TARGET_CLASSES": [
-    0
+    0,
+    1
   ],
   "MOUSE_MODE": "mouse",
   "KMBOX_IP": "192.168.2.201",
