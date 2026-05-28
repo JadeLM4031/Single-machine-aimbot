@@ -12,10 +12,10 @@
     0,
     1
   ],
-  "MOUSE_MODE": "mouse",
-  "KMBOX_IP": "192.168.2.201",
+  "MOUSE_MODE": "kmbox_net",
+  "KMBOX_IP": "192.168.2.168",
   "KMBOX_PORT": "64532",
-  "KMBOX_MAC": "",
+  "KMBOX_MAC": "B7510C3D",
   "KMBOX_SERIAL_PORT": "COM3",
   "SMOOTH_FACTOR": 0.3,
   "AIM_TRIGGER_KEY": "right_mouse",

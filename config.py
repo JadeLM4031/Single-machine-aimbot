@@ -31,12 +31,12 @@ CONFIDENCE_THRESHOLD = 0.5
 TARGET_CLASSES = [0, 1]  # 0: head, 1: body
 
 # 鼠标控制模式: "mouse" / "kmbox_net" / "kmbox_serial"
-MOUSE_MODE = "mouse"
+MOUSE_MODE = "kmbox_net"
 
 # KMBox 配置
-KMBOX_IP = "192.168.2.188"
-KMBOX_PORT = "24105"
-KMBOX_MAC = ""  # KMBox 的 UUID/MAC，设备底部标签上可以找到
+KMBOX_IP = "192.168.2.168"
+KMBOX_PORT = "64532"
+KMBOX_MAC = "B7510C3D"  # KMBox 的 UUID/MAC，设备底部标签上可以找到
 KMBOX_SERIAL_PORT = "COM3"
 
 # 移动平滑度（0.1~1.0）

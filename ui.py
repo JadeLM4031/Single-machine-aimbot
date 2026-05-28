@@ -578,10 +578,20 @@ class AimWindow(QMainWindow):
             self.detector.model_path = config.MODEL_PATH
             self.detector.load()
             
-            # 在这里会尝试进行鼠标/硬件连接初始化，如果连接失败会内部调用 self._stop() 并抛出异常
-            self._on_mouse_mode_changed(self.combo_mouse.currentIndex())
+            # 🔴 修复启动时序 Bug：直接显式调起底层硬件握手，不经由 _on_mouse_mode_changed 里的 running 检测限制
+            kwargs = {}
+            if config.MOUSE_MODE == "kmbox_net":
+                kwargs = {
+                    "ip": self.edit_ip.text(),
+                    "port": self.edit_port.text(),
+                    "mac": self.edit_mac.text(),
+                }
+            elif config.MOUSE_MODE == "kmbox_serial":
+                kwargs = {"serial_port": self.edit_serial.text()}
             
-            # 🔴 硬件安全防封修改：如果盒子连接失败被 _stop 了，此处直接退出启动过程！
+            self.mover.switch_mode(config.MOUSE_MODE, **kwargs)
+            
+            # 🔴 硬件安全防封修改：如果盒子连接失败，此处直接退出启动过程
             if not self.mover._kmbox_net_ready and config.MOUSE_MODE == "kmbox_net":
                 self._stop()
                 return
