@@ -237,47 +237,64 @@ class MouseController:
 
     def _connect_kmbox_net(self):
         try:
+            # 支持 root 目录和 python_pyd 等各种路径形式的 kmNet.pyd 文件导入
             import kmNet
         except ImportError:
-            self.mode = "mouse"
-            raise RuntimeError("找不到 kmNet.pyd 驱动文件，请将其放到程序同级目录下")
+            # 坚决不回退到 mouse 模式，保持 kmbox_net 状态并报出明确错误
+            raise RuntimeError(
+                "找不到 kmNet 驱动文件。\n"
+                "请确保 'kmNet.cp310-win_amd64.pyd' 已经放置在项目根目录下！"
+            )
 
         ip = config.KMBOX_IP
         port = str(config.KMBOX_PORT)
         mac = config.KMBOX_MAC
 
-        result = kmNet.init(ip, port, mac)
+        config.log(f"[Output] 正在尝试连接 KMBox 网络版 (IP: {ip}, 端口: {port}, MAC/UUID: {mac})...")
+        
+        # 尝试进行硬件初始化
+        try:
+            result = kmNet.init(ip, port, mac)
+        except Exception as e:
+            raise RuntimeError(f"KMBox 硬件通讯发生严重异常异常: {e}")
+
         if result != 0:
-            self.mode = "mouse"
             raise RuntimeError(
-                f"KMBox 初始化失败 (错误码: {result})，请检查 IP/端口/MAC"
+                f"KMBox 网络初始化失败 (错误码: {result})。\n"
+                "请检查：1. 盒子屏幕显示的 IP/端口/MAC 是否完全一致；2. 电脑与盒子能否正常 ping 通。"
             )
 
         self._kmbox_net_ready = True
-        config.log("[Output] Channel configuration completed (network)")
+        config.log("[Output] KMBox 硬件网络连接成功！已开启高隐蔽硬件级加密通讯通道 (enc_move)")
 
     def _move_kmbox_net(self, dx, dy):
         if not self._kmbox_net_ready:
+            # 严格防止在未就绪时误触发任何动作
             return
         import kmNet
-
-        kmNet.move(dx, dy)
+        try:
+            # 🟢 终极隐蔽防封：使用加密防抓包特征扫描的 enc_move 硬件指令进行相对移动
+            kmNet.enc_move(dx, dy)
+        except Exception as e:
+            config.log(f"[Warning] KMBox 发送移动指令失败: {e}")
 
     def _click_kmbox_net(self, button="left"):
         if not self._kmbox_net_ready:
             return
         import kmNet
-
-        # 🟢 KMBox 网卡物理层模拟点击的高斯分布人类延迟
-        delay = max(0.045, min(0.110, random.normalvariate(0.070, 0.012)))
-        if button == "left":
-            kmNet.left(1)
-            time.sleep(delay)
-            kmNet.left(0)
-        elif button == "right":
-            kmNet.right(1)
-            time.sleep(delay)
-            kmNet.right(0)
+        try:
+            # 🟢 KMBox 网卡物理层模拟点击的高斯分布人类延迟
+            delay = max(0.045, min(0.110, random.normalvariate(0.070, 0.012)))
+            if button == "left":
+                kmNet.enc_left(1)
+                time.sleep(delay)
+                kmNet.enc_left(0)
+            elif button == "right":
+                kmNet.enc_right(1)
+                time.sleep(delay)
+                kmNet.enc_right(0)
+        except Exception as e:
+            config.log(f"[Warning] KMBox 发送点击指令失败: {e}")
 
     def _connect_kmbox_serial(self):
         if serial is None:

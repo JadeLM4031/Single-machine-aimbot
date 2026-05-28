@@ -577,8 +577,20 @@ class AimWindow(QMainWindow):
             self.capture.open()
             self.detector.model_path = config.MODEL_PATH
             self.detector.load()
+            
+            # 在这里会尝试进行鼠标/硬件连接初始化，如果连接失败会内部调用 self._stop() 并抛出异常
             self._on_mouse_mode_changed(self.combo_mouse.currentIndex())
+            
+            # 🔴 硬件安全防封修改：如果盒子连接失败被 _stop 了，此处直接退出启动过程！
+            if not self.mover._kmbox_net_ready and config.MOUSE_MODE == "kmbox_net":
+                self._stop()
+                return
+            if not self.mover._kmbox_serial_conn and config.MOUSE_MODE == "kmbox_serial":
+                self._stop()
+                return
+                
         except Exception as e:
+            self._stop()
             config.log(f"启动失败: {e}")
             QMessageBox.critical(self, "启动失败", str(e))
             return
@@ -943,15 +955,16 @@ class AimWindow(QMainWindow):
                 kwargs = {"serial_port": self.edit_serial.text()}
             self.mover.switch_mode(mode, **kwargs)
         except Exception as e:
-            self.mover.mode = "mouse"
-            config.MOUSE_MODE = "mouse"
-            self.combo_mouse.blockSignals(True)
-            self.combo_mouse.setCurrentIndex(0)
-            self.combo_mouse.blockSignals(False)
-            self._update_kmbox_visibility()
-            config.log(f"[Output] Interface link error: {e}")
-            QMessageBox.warning(
-                self, "连接失败", f"KMBox 连接失败，已回退到真鼠标模式。\n\n{e}"
+            # 🔴 硬件安全防封修改：连接失败时坚决不强制降级回 mouse (win32) 模式！
+            # 保持所选的硬件模式，但自动切断并停止 Aimbot 线程运行，等待人工排查
+            self._stop()
+            config.log(f"[ERROR] KMBox 连接失败: {e}")
+            QMessageBox.critical(
+                self, 
+                "硬件连接失败 (安全保护中)", 
+                f"KMBox 硬件连接失败，自瞄已安全终止运行！\n\n"
+                f"错误详情: {e}\n\n"
+                f"💡 安全提示：为了防止被反作弊检测，程序坚决未降级到软件模拟（Win32）模式。请检查盒子网线连接、网络 IP 配置或串口，排查正确后重新开启。"
             )
 
     def _update_kmbox_visibility(self):

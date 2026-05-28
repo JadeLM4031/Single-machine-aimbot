@@ -46,6 +46,8 @@ if ($LASTEXITCODE -eq 0) {
     }
     if (Test-Path .\kmNet.pyd) {
         Copy-Item -Path kmNet.pyd -Destination .\build\kmNet.pyd -Force
+    } elseif (Test-Path .\kmNet.cp310-win_amd64.pyd) {
+        Copy-Item -Path .\kmNet.cp310-win_amd64.pyd -Destination .\build\kmNet.pyd -Force
     }
 
     # 5. Generate a robust, double-clickable quiet launcher (.bat) inside ./build/
