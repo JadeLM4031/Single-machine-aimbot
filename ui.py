@@ -191,6 +191,8 @@ class _LogBridge(QObject):
 
 
 class AimWindow(QMainWindow):
+    frame_ready = Signal(np.ndarray, list)
+
     def __init__(self):
         super().__init__()
         
@@ -225,6 +227,7 @@ class AimWindow(QMainWindow):
         self.last_target_time = 0.0
         self.target_vel_x = 0.0
         self.target_vel_y = 0.0
+        self.locked_target_size = (60, 60)
         
         # 🟢 【行为特征防御】：引入生理学神经反射和控制决策参数
         self.handover_cooldown_until = 0.0  # 击毙/丢失后的反应时间冷却（秒）
@@ -248,8 +251,7 @@ class AimWindow(QMainWindow):
         self._log_bridge.log_signal.connect(self._on_log)
         config._log_callback = lambda line: self._log_bridge.log_signal.emit(line)
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._update_frame)
+        self.frame_ready.connect(self._on_frame_ready)
 
     def eventFilter(self, obj, event):
         if isinstance(obj, (QComboBox, QSlider)):
@@ -619,11 +621,9 @@ class AimWindow(QMainWindow):
 
         t = threading.Thread(target=self._detect_loop, daemon=True)
         t.start()
-        self.timer.start(16)
 
     def _stop(self):
         self.running = False
-        self.timer.stop()
         self.capture.close()
         self.mover.close()
         config.log("已停止")
@@ -663,7 +663,7 @@ class AimWindow(QMainWindow):
                 crop, offset = self.capture.crop_detect_region(frame)
                 targets = self.detector.detect(crop)
 
-                # 3. 🟢 核心改动：两边各自安好
+                # 3. 核心改动：两边各自安好
                 # 存一份给 UI 绘制用的全局坐标（让绿框完美挂在人头上）
                 targets_global = []
                 for t in targets:
@@ -701,7 +701,7 @@ class AimWindow(QMainWindow):
                 with self.lock:
                     # UI 拿有加偏置的，自瞄用纯局部未污染坐标
                     self.latest_targets = targets_global
-                    self.latest_targets_local = targets
+                    self.latest_targets_local = list(targets)
 
                 self._det_count += 1
                 now = time.time()
@@ -711,7 +711,7 @@ class AimWindow(QMainWindow):
                     self._det_count = 0
                     self._det_time = now
 
-                # 5. 触发逻辑：完全基于 320x320 切片相对偏差进行拟人化 PID 自瞄
+                # 5. 触发逻辑：完全基于 320x320 切片相对偏差进行拟人化 PID 自瞄并配合航位推算外推引擎 (EDR)
                 if self._is_aim_triggered():
                     self.pid_active = True
                     
@@ -722,136 +722,172 @@ class AimWindow(QMainWindow):
                         self.target_vel_x = 0.0
                         self.target_vel_y = 0.0
                         self.is_new_lock_session = True
+                        # 冷却期间，如果开启预览，依然保持预览的持续同步推送
+                        if config.SHOW_PREVIEW:
+                            self.frame_ready.emit(crop.copy(), list(targets))
                         continue
 
-                    if targets:
-                        # 🟢 第一阶段：智能目标选择与短期锁定记忆机制
-                        target_to_track = None
+                    target_to_track = None
+                    is_extrapolated = False
+
+                    # 🟢 EDR 航位推算第一阶段：寻找原锁定目标的匹配，或尝试进入外推阶段
+                    if self.locked_target_center is not None and now - self.locked_target_time < 0.5:
+                        # 寻找原锁定点 45 像素邻域内的真实检出目标
+                        min_match_dist = float('inf')
+                        best_match = None
+                        for t in targets:
+                            tx, ty = t["center"]
+                            lx, ly = self.locked_target_center
+                            dist = math.sqrt((tx - lx)**2 + (ty - ly)**2)
+                            if dist < 45.0:  # 45像素匹配门限
+                                if dist < min_match_dist:
+                                    min_match_dist = dist
+                                    best_match = t
                         
-                        # 检查是否有锁定时间记忆（500ms 内）
-                        if self.locked_target_center is not None and now - self.locked_target_time < 0.5:
-                            # 寻找原锁定点 45 像素邻域内的目标
-                            min_match_dist = float('inf')
-                            best_match = None
-                            for t in targets:
-                                tx, ty = t["center"]
-                                lx, ly = self.locked_target_center
-                                dist = math.sqrt((tx - lx)**2 + (ty - ly)**2)
-                                if dist < 45.0:  # 45像素追踪阈值
-                                    if dist < min_match_dist:
-                                        min_match_dist = dist
-                                        best_match = t
-                            if best_match is not None:
-                                target_to_track = best_match
+                        if best_match is not None:
+                            target_to_track = best_match
+                            # 更新锁定目标的状态与尺寸
+                            self.locked_target_center = target_to_track["center"]
+                            self.locked_target_time = now
+                            x1, y1, x2, y2 = target_to_track["bbox"]
+                            self.locked_target_size = (x2 - x1, y2 - y1)
+                        else:
+                            # 🟢 EDR 外插预测逻辑：真实 YOLO 未检出，核算目标丢失时长
+                            time_since_last_seen = now - self.locked_target_time
+                            if time_since_last_seen < 0.120:  # 允许最多外插 120ms 丢帧（约 2-3 帧推理）
+                                # 根据上一次的滤波速度推算新坐标
+                                time_delta = now - self.locked_target_time
+                                pred_dx = self.target_vel_x * time_delta
+                                pred_dy = self.target_vel_y * time_delta
+                                
+                                ecx = self.locked_target_center[0] + pred_dx
+                                ecy = self.locked_target_center[1] + pred_dy
+                                
+                                # 安全剪切
+                                ecx = max(10, min(self.detector.detect_size - 10, ecx))
+                                ecy = max(10, min(self.detector.detect_size - 10, ecy))
+                                
+                                t_w, t_h = getattr(self, "locked_target_size", (60, 60))
+                                extrapolated_center = (int(ecx), int(ecy))
+                                
+                                # 动态构建虚拟预测目标
+                                target_to_track = {
+                                    "center": extrapolated_center,
+                                    "head": extrapolated_center,
+                                    "neck": (extrapolated_center[0], int(extrapolated_center[1] + t_h * 0.20)),
+                                    "chest": (extrapolated_center[0], int(extrapolated_center[1] + t_h * 0.95)),
+                                    "bbox": (int(ecx - t_w/2), int(ecy - t_h/2), int(ecx + t_w/2), int(ecy + t_h/2)),
+                                    "confidence": 0.80,
+                                    "class_id": 0,
+                                    "is_extrapolated": True
+                                }
+                                is_extrapolated = True
+                                
+                                # 更新锁定中心缓存以维持后续的外插惯性，但锁定时间保持不动（代表最后一次真检出时间）
+                                self.locked_target_center = extrapolated_center
+                                # 追加到 targets 以便 draw_results 绘制 "predicting..." 虚框
+                                targets.append(target_to_track)
                             else:
-                                # 🟢 【行为核心优化】：原追踪目标在这一帧丢失/被击毙！立刻注入 110ms~190ms 的随机人类神经反射冷却
-                                # 彻底消灭 0 毫秒瞬间 snapping 反人类指纹，保护物理行为曲线不被上传审计
+                                # 丢失超时：判定为目标死亡或完全拉失，开始注入 110ms~190ms 人类视觉盲区延迟，消灭 0ms 反人类动作
                                 self.handover_cooldown_until = now + random.uniform(0.110, 0.190)
                                 self.locked_target_center = None
                                 self.is_new_lock_session = True
 
-                        # 🟢 第二阶段：击毙秒切/无锁定记忆时，选择离当前准心最近的敌人（Crosshair Proximity Priority）
-                        if target_to_track is None:
-                            min_center_dist = float('inf')
-                            best_t = targets[0]
-                            crop_h, crop_w = frame.shape[:2]
-                            cx, cy = crop_w // 2, crop_h // 2
-                            
-                            for t in targets:
-                                tx, ty = t["center"]
-                                dist = math.sqrt((tx - cx)**2 + (ty - cy)**2)
-                                if dist < min_center_dist:
-                                    min_center_dist = dist
-                                    best_t = t
+                    # 🟢 EDR 航位推算第二阶段：若当前无追踪目标，或已判定丢失，则寻找画面中离准心最近的新目标
+                    if target_to_track is None and targets:
+                        min_center_dist = float('inf')
+                        best_t = targets[0]
+                        cx = self.detector.detect_size // 2
+                        cy = self.detector.detect_size // 2
+                        
+                        for t in targets:
+                            # 忽略其他可能已经外插的数据
+                            if t.get("is_extrapolated"):
+                                continue
+                            tx, ty = t["center"]
+                            dist = math.sqrt((tx - cx)**2 + (ty - cy)**2)
+                            if dist < min_center_dist:
+                                min_center_dist = dist
+                                best_t = t
+                        
+                        # 确保不是个空的目标
+                        if best_t is not None:
                             target_to_track = best_t
-
-                        # 🟢 第三阶段：更新锁敌追踪记忆并计算自适应 EMA 运动预测，最后执行自瞄
-                        if target_to_track is not None:
                             self.locked_target_center = target_to_track["center"]
                             self.locked_target_time = now
-                            
-                            # 🟢 【生理抖动微漂移】：更新低频且极其平滑的 ocular fixational drift 生理眼球微游离位移 (自回归过程)
-                            # 漂移回归系数 0.08 (极缓)，标准差 0.25 (超精细子像素级别手抖)，让准心产生极其自然的生物颤动
-                            self.drift_x += -0.08 * self.drift_x + 0.25 * random.gauss(0, 1)
-                            self.drift_y += -0.08 * self.drift_y + 0.25 * random.gauss(0, 1)
-
-                            # 🟢 【落点随机离散化】：如果是新锁敌或刚切目标，随机生成本轮锁敌的高斯定点偏差 (标准差为目标包长宽的 3.5%)
-                            # 代表人眼聚焦时无法 100% 对齐到完美物理中点的天然视差误差，在持续锁敌期间该偏差保持锁定
                             x1, y1, x2, y2 = target_to_track["bbox"]
-                            t_w = max(1, x2 - x1)
-                            t_h = max(1, y2 - y1)
-                            if self.is_new_lock_session:
-                                self.dispersal_x = random.normalvariate(0.0, t_w * 0.035)
-                                self.dispersal_y = random.normalvariate(0.0, t_h * 0.035)
-                                self.is_new_lock_session = False
+                            self.locked_target_size = (x2 - x1, y2 - y1)
                             
-                            # 🟢 运动预测提前量估算 (极轻量级卡尔曼式 EMA 速度滤波器)
-                            pred_dx = 0.0
-                            pred_dy = 0.0
-                            
+                            # 速度滤波重置
+                            self.last_target_center = None
+                            self.last_target_time = 0.0
+                            self.target_vel_x = 0.0
+                            self.target_vel_y = 0.0
+                            self.is_new_lock_session = True
+
+                    # 🟢 EDR 航位推算第三阶段：计算速度与物理控制发包
+                    if target_to_track is not None:
+                        # 只有在非外推（真检出）状态下，才累加和计算瞬时移动速度，用于自适应 EMA 速度滤波器
+                        if not is_extrapolated:
                             if self.last_target_center is not None and self.last_target_time > 0.0:
                                 last_cx, last_cy = self.last_target_center
                                 current_cx, current_cy = target_to_track["center"]
                                 time_delta = now - self.last_target_time
                                 
-                                # 限制时差范围在 1ms 到 200ms 内，防止大掉帧或初始帧带来的瞬时极端速度
                                 if 0.001 < time_delta < 0.2:
-                                    # 瞬时相对移动速度 (像素/秒)
                                     inst_vx = (current_cx - last_cx) / time_delta
                                     inst_vy = (current_cy - last_cy) / time_delta
                                     
-                                    # EMA 指数滑动平均平滑去噪，滤波因子 0.2
-                                    self.target_vel_x = 0.2 * inst_vx + 0.8 * self.target_vel_x
-                                    self.target_vel_y = 0.2 * inst_vy + 0.8 * self.target_vel_y
-                                    
-                                    # 物理预测补偿时间 (截屏延迟 + 推理延迟约 15 毫秒)
-                                    compensation_time = 0.015
-                                    pred_dx = self.target_vel_x * compensation_time
-                                    pred_dy = self.target_vel_y * compensation_time
-                                    
-                            # 更新历史追踪缓存
+                                    self.target_vel_x = 0.25 * inst_vx + 0.75 * self.target_vel_x
+                                    self.target_vel_y = 0.25 * inst_vy + 0.75 * self.target_vel_y
+                            
                             self.last_target_center = target_to_track["center"]
                             self.last_target_time = now
 
-                            # 计算带运动预测提前量、生理漂移与高斯离散弹着点的最终目标坐标
-                            aim_part = getattr(config, "AIM_PART", "head")
-                            aim_pt = target_to_track.get(aim_part, target_to_track["head"])
-                            aim_x = aim_pt[0] + pred_dx + self.dispersal_x + self.drift_x
-                            aim_y = aim_pt[1] + pred_dy + self.dispersal_y + self.drift_y
+                        # 🟢 计算生理抖动微漂移 (一阶自回归，标准差 0.25 像素)
+                        self.drift_x += -0.08 * self.drift_x + 0.25 * random.gauss(0, 1)
+                        self.drift_y += -0.08 * self.drift_y + 0.25 * random.gauss(0, 1)
 
-                            crop_h, crop_w = frame.shape[:2]
-                            center_x = crop_w // 2
-                            center_y = crop_h // 2
+                        # 🟢 生成本轮锁敌的高斯定点偏置
+                        x1, y1, x2, y2 = target_to_track["bbox"]
+                        t_w = max(1, x2 - x1)
+                        t_h = max(1, y2 - y1)
+                        if self.is_new_lock_session:
+                            self.dispersal_x = random.normalvariate(0.0, t_w * 0.035)
+                            self.dispersal_y = random.normalvariate(0.0, t_h * 0.035)
+                            self.is_new_lock_session = False
+                        
+                        # 物理运动预测（只有在真检出时计算，外插时因直接使用推算点，故预测量为 0）
+                        pred_dx = 0.0
+                        pred_dy = 0.0
+                        if not is_extrapolated:
+                            compensation_time = 0.015  # 截屏延迟 + 推理延迟约 15 毫秒
+                            pred_dx = self.target_vel_x * compensation_time
+                            pred_dy = self.target_vel_y * compensation_time
 
-                            raw_dx = aim_x - center_x
-                            raw_dy = aim_y - center_y
+                        aim_part = getattr(config, "AIM_PART", "head")
+                        aim_pt = target_to_track.get(aim_part, target_to_track["head"])
+                        aim_x = aim_pt[0] + pred_dx + self.dispersal_x + self.drift_x
+                        aim_y = aim_pt[1] + pred_dy + self.dispersal_y + self.drift_y
 
-                            distance = math.sqrt(raw_dx**2 + raw_dy**2)
+                        center_x = self.detector.detect_size // 2
+                        center_y = self.detector.detect_size // 2
 
-                            # 2像素死区判定，彻底杜绝准心最后阶段频繁发包抽搐
-                            if distance <= 2.5:
-                                self.mover.pid_x.reset()
-                                self.mover.pid_y.reset()
-                                continue
+                        raw_dx = aim_x - center_x
+                        raw_dy = aim_y - center_y
 
-                            # 🟢 终极防抖与高刷同步发包
-                            if now - last_move_time > random.uniform(0.010, 0.015):
-                                # 🟢 【核心优化】：代数 Sigmoid 连续粘滞阻尼平滑算法，替代原始死板的阶梯限速
-                                # 极近距离下提供 0.45 磁性粘性，远距离快速拉枪渐近线收敛于 1.0，过渡半宽 k=12.0 像素 (k^2 = 144)
-                                sigmoid_factor = 0.45 + 0.55 * (distance**2) / (distance**2 + 144.0)
-                                x1, y1, x2, y2 = target_to_track["bbox"]
-                                t_w = max(1, x2 - x1)
-                                self.mover.move(raw_dx * sigmoid_factor, raw_dy * sigmoid_factor, target_w=t_w)
-                                last_move_time = now
-                        else:
-                            self.locked_target_center = None
-                            self.last_target_center = None
-                            self.last_target_time = 0.0
-                            self.target_vel_x = 0.0
-                            self.target_vel_y = 0.0
+                        distance = math.sqrt(raw_dx**2 + raw_dy**2)
+
+                        # 物理精细死区判定
+                        if distance <= 1.2:
                             self.mover.pid_x.reset()
                             self.mover.pid_y.reset()
-                            self.is_new_lock_session = True
+                        else:
+                            # 终极防抖与高刷同步发包
+                            if now - last_move_time > random.uniform(0.010, 0.015):
+                                sigmoid_factor = 0.55 + 0.45 * (distance**2) / (distance**2 + 144.0)
+                                self.mover.move(raw_dx * sigmoid_factor, raw_dy * sigmoid_factor, target_w=t_w)
+                                last_move_time = now
                     else:
                         self.locked_target_center = None
                         self.last_target_center = None
@@ -868,11 +904,14 @@ class AimWindow(QMainWindow):
                     self.target_vel_x = 0.0
                     self.target_vel_y = 0.0
                     self.is_new_lock_session = True
-                    # 🟢 PID 状态锁优化：仅在从“活跃”切换至“非活跃”的瞬间重置一次，避免高频静止帧空转刷新
                     if self.pid_active:
                         self.mover.pid_x.reset()
                         self.mover.pid_y.reset()
                         self.pid_active = False
+
+                # 无论是否触发自瞄，只要开启预览，均向主线程发送最新的检测切片进行 100% 同步渲染
+                if config.SHOW_PREVIEW:
+                    self.frame_ready.emit(crop.copy(), list(targets))
 
             except Exception as e:
                 QTimer.singleShot(0, lambda: self.log(f"运行错误: {e}"))
@@ -880,6 +919,123 @@ class AimWindow(QMainWindow):
             time.sleep(0.001)
 
     def _is_aim_triggered(self):
+        # 🟢 终极隐蔽防封 + 智能插入状态诊断系统 (闭环自愈灾备降级)
+        # 如果检测到用户在电脑上按下了按键，但硬件盒子没监听到，说明设备被插错了插槽！
+        # 此时我们会自动安全降级至系统 API 监听，防止自瞄完全瘫痪，并提供高亮警告提示。
+        if config.MOUSE_MODE == "kmbox_net" and self.mover._kmbox_net_ready:
+            try:
+                import kmNet
+                key = config.AIM_TRIGGER_KEY
+                
+                if key == "right_mouse":
+                    hw_pressed = bool(kmNet.isdown(2))
+                    sys_pressed = False
+                    if win32api is not None and win32con is not None:
+                        sys_pressed = bool(win32api.GetAsyncKeyState(win32con.VK_RBUTTON) & 0x8000)
+                    
+                    if sys_pressed and not hw_pressed:
+                        # 🔴 硬件安全防封 Fail-Stop 终极保护：发现错插，绝不降级，直接熔断关停！
+                        self._stop()
+                        config.log("🚨 [CRITICAL ERROR] 检测到鼠标错插在【电脑主机】上！为了保障防封安全性，自瞄已安全拉闸停机！")
+                        # 弹出 UI 提示框，并在子线程中以安全方式警告用户
+                        from PySide6.QtWidgets import QMessageBox
+                        import threading
+                        def show_box():
+                            msg = QMessageBox(self)
+                            msg.setIcon(QMessageBox.Critical)
+                            msg.setWindowTitle("硬件连接错误 (安全断电保护)")
+                            msg.setText("🚨 终极安全断电保护触发！\n\n检测到您的右键按键信号发自【电脑主机】，而非物理盒子接口！这说明鼠标被错插到了主机上。\n\n为了您的账号安全，系统已强制断电（Fail-Stop）关停自瞄！请立即将键盘/鼠标插回【KMBox 硬件盒子】，然后再重新启动自瞄。")
+                            msg.exec()
+                        threading.Thread(target=show_box, daemon=True).start()
+                        return False
+                    return hw_pressed
+                    
+                elif key == "xbutton":
+                    hw_pressed = bool(kmNet.isdown(4) or kmNet.isdown(5))
+                    sys_pressed = False
+                    if win32api is not None:
+                        sys_pressed = bool(win32api.GetAsyncKeyState(0x05) & 0x8000)
+                    
+                    if sys_pressed and not hw_pressed:
+                        self._stop()
+                        config.log("🚨 [CRITICAL ERROR] 检测到鼠标错插在【电脑主机】上！自瞄已安全拉闸停机！")
+                        from PySide6.QtWidgets import QMessageBox
+                        import threading
+                        def show_box():
+                            msg = QMessageBox(self)
+                            msg.setIcon(QMessageBox.Critical)
+                            msg.setWindowTitle("硬件连接错误 (安全断电保护)")
+                            msg.setText("🚨 终极安全断电保护触发！\n\n检测到侧键按键信号发自【电脑主机】，说明鼠标被错插到了主机上。\n\n为了账号安全，自瞄已强制拉闸！请立即将鼠标插回【KMBox 硬件盒子】。")
+                            msg.exec()
+                        threading.Thread(target=show_box, daemon=True).start()
+                        return False
+                    return hw_pressed
+                    
+                elif key == "ctrl":
+                    hw_pressed = bool(kmNet.isdown_keyboard(224))
+                    sys_pressed = False
+                    if win32api is not None and win32con is not None:
+                        sys_pressed = bool(win32api.GetAsyncKeyState(win32con.VK_CONTROL) & 0x8000)
+                    
+                    if sys_pressed and not hw_pressed:
+                        self._stop()
+                        config.log("🚨 [CRITICAL ERROR] 检测到键盘错插在【电脑主机】上！自瞄已安全拉闸停机！")
+                        from PySide6.QtWidgets import QMessageBox
+                        import threading
+                        def show_box():
+                            msg = QMessageBox(self)
+                            msg.setIcon(QMessageBox.Critical)
+                            msg.setWindowTitle("硬件连接错误 (安全断电保护)")
+                            msg.setText("🚨 终极安全断电保护触发！\n\n检测到键盘 Ctrl 信号发自【电脑主机】，说明键盘被错插到了主机上。\n\n为了账号安全，自瞄已强制拉闸！请立即将键盘插回【KMBox 硬件盒子】。")
+                            msg.exec()
+                        threading.Thread(target=show_box, daemon=True).start()
+                        return False
+                    return hw_pressed
+                    
+                elif key == "shift":
+                    hw_pressed = bool(kmNet.isdown_keyboard(225))
+                    sys_pressed = False
+                    if win32api is not None and win32con is not None:
+                        sys_pressed = bool(win32api.GetAsyncKeyState(win32con.VK_SHIFT) & 0x8000)
+                    
+                    if sys_pressed and not hw_pressed:
+                        self._stop()
+                        config.log("🚨 [CRITICAL ERROR] 检测到键盘错插在【电脑主机】上！自瞄已安全拉闸停机！")
+                        from PySide6.QtWidgets import QMessageBox
+                        import threading
+                        def show_box():
+                            msg = QMessageBox(self)
+                            msg.setIcon(QMessageBox.Critical)
+                            msg.setWindowTitle("硬件连接错误 (安全断电保护)")
+                            msg.setText("🚨 终极安全断电保护触发！\n\n检测到键盘 Shift 信号发自【电脑主机】，说明键盘被错插到了主机上。\n\n为了账号安全，自瞄已强制拉闸！请立即将键盘插回【KMBox 硬件盒子】。")
+                            msg.exec()
+                        threading.Thread(target=show_box, daemon=True).start()
+                        return False
+                    return hw_pressed
+                    
+                elif key == "alt":
+                    hw_pressed = bool(kmNet.isdown_keyboard(226))
+                    sys_pressed = False
+                    if win32api is not None and win32con is not None:
+                        sys_pressed = bool(win32api.GetAsyncKeyState(win32con.VK_MENU) & 0x8000)
+                    
+                    if sys_pressed and not hw_pressed:
+                        self._stop()
+                        config.log("🚨 [CRITICAL ERROR] 检测到键盘错插在【电脑主机】上！自瞄已安全拉闸停机！")
+                        from PySide6.QtWidgets import QMessageBox
+                        import threading
+                        def show_box():
+                            msg = QMessageBox(self)
+                            msg.setIcon(QMessageBox.Critical)
+                            msg.setWindowTitle("硬件连接错误 (安全断电保护)")
+                            msg.setText("🚨 终极安全断电保护触发！\n\n检测到键盘 Alt 信号发自【电脑主机】，说明键盘被错插到了主机上。\n\n为了账号安全，自瞄已强制拉闸！请立即将键盘插回【KMBox 硬件盒子】。")
+                            msg.exec()
+                        threading.Thread(target=show_box, daemon=True).start()
+                        return False
+                    return hw_pressed
+            except Exception:
+                pass
+
         if win32api is None or win32con is None:
             return False
         key = config.AIM_TRIGGER_KEY
@@ -898,16 +1054,11 @@ class AimWindow(QMainWindow):
             pass
         return False
 
-    def _update_frame(self):
+    def _on_frame_ready(self, frame, targets):
         if not self.running or not config.SHOW_PREVIEW:
             return
 
-        ret, frame = self.capture.retrieve()
-        if not ret or frame is None or frame.size == 0:
-            return
-
         with self.lock:
-            targets = list(self.latest_targets_local)
             det_fps = self.detect_fps
 
         self.detector.draw_results(frame, targets)
@@ -927,10 +1078,12 @@ class AimWindow(QMainWindow):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        
+        # 🟢 【性能优化】：改用 FastTransformation (最快邻近插值) 缩放，彻底杜绝 SmoothTransformation 的 CPU 阻塞与高延迟，彻底释放 Python GIL 锁
         pixmap = QPixmap.fromImage(qimg).scaled(
             self.preview_label.size(),
             Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.FastTransformation,
         )
         self.preview_label.setPixmap(pixmap)
 

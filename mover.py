@@ -128,10 +128,10 @@ class MouseController:
         self._kmbox_serial_conn = None
         self._kmbox_net_ready = False
 
-        # 实例化 X 和 Y 轴的专属自适应 PID 控制器
-        # 参数推荐：Kp=0.1, Ki=0.0, Kd=0.0015
-        self.pid_x = PythonAdaptivePID(0.1, 0.0, 0.0015)
-        self.pid_y = PythonAdaptivePID(0.1, 0.0, 0.0015)
+        # 🟢 硬件优化：针对 KMBox 纯物理无软件加速的特性，上调 Kp (比例) 和 Kd (微分预测) 基础增益
+        # 使硬件的响应速度更快，拉枪更加灵敏，完美跟手
+        self.pid_x = PythonAdaptivePID(0.15, 0.0, 0.0025)
+        self.pid_y = PythonAdaptivePID(0.15, 0.0, 0.0025)
         self.last_pid_time = time.time()
 
         # 🟢 实例化 X 和 Y 通道的专属 OU 生理性微颤抖动发生器
@@ -176,27 +176,36 @@ class MouseController:
         step_x = self.pid_x.update(dx, dt, target_w=target_w)
         step_y = self.pid_y.update(dy, dt, target_w=target_w)
 
-        # 2. 🟢 【核心修复】：放大平滑反馈，引入杠杆缩放和微动保底！
-        # 彻底解决小像素偏移下乘以 smooth 后四舍五入直接归零（不发包）的重大缺陷
-        move_x = step_x * self.smooth * 2.5
-        move_y = step_y * self.smooth * 2.5
+        # 2. 🟢 【手感核心放大】：KMBox 是物理外设，没有任何 Win 软件精度加速！
+        # 必须大幅度调高物理杠杆比例（由原 2.5 倍重度上调至 4.5 倍），以获得极强的物理磁性贴头吸附手感
+        move_x = step_x * self.smooth * 4.5
+        move_y = step_y * self.smooth * 4.5
 
-        # 3. 🟢 拟人化微颤注入：引入生理性手抖 (均值回归，数学防封)
-        jitter_x = self.ou_x.update()
-        jitter_y = self.ou_y.update()
+        # 计算误差的几何距离，判断是否已接近目标
+        dist = math.sqrt(dx**2 + dy**2)
+
+        # 3. 🟢 自适应生理颤抖阻尼：根据与目标中心距离自适应调节生理颤抖噪声的强度
+        # 如果已经锁在目标中心附近（距离 < 6.0 像素），大幅收敛手抖幅度至 15%，防止准心在人脸中心剧烈微颤，但仍保留极微弱的真人肌肉低频微颤特征
+        jitter_scale = 0.15 if dist < 6.0 else 1.0
+        jitter_x = self.ou_x.update() * jitter_scale
+        jitter_y = self.ou_y.update() * jitter_scale
         move_x += jitter_x
         move_y += jitter_y
 
-        # 拟人化四舍五入微动补偿：只要有偏差且不为0，至少给 1 像素的物理推进力
-        if move_x > 0 and move_x < 1.0:
-            move_x = 1.0
-        elif move_x < 0 and move_x > -1.0:
-            move_x = -1.0
-
-        if move_y > 0 and move_y < 1.0:
-            move_y = 1.0
-        elif move_y < 0 and move_y > -1.0:
-            move_y = -1.0
+        # 4. 🟢 消除 1 像素物理强行进位（自适应物理进位保底）：
+        # 只有在距离较远（dist >= 6.0）且有实际运动意图（abs(step) > 0.05）时，才实施 1 像素物理推进保底
+        # 如果已经极度接近目标（dist < 6.0），绝对不进行强行保底，直接自然截断/常规转换，根除高频颤抖死穴！
+        if dist >= 6.0:
+            if abs(step_x) > 0.05:
+                if move_x > 0 and move_x < 1.0:
+                    move_x = 1.0
+                elif move_x < 0 and move_x > -1.0:
+                    move_x = -1.0
+            if abs(step_y) > 0.05:
+                if move_y > 0 and move_y < 1.0:
+                    move_y = 1.0
+                elif move_y < 0 and move_y > -1.0:
+                    move_y = -1.0
 
         # 限制单次移动物理极限，防止瞬间瞬移被反作弊检测
         final_move_x = max(-100, min(100, int(move_x)))

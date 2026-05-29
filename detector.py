@@ -18,12 +18,12 @@ class Detector:
         self.target_classes = config.TARGET_CLASSES
         self.detect_size = 320
         
-        # 🟢 【核心优化】：将 PyTorch 的 CUDA 显存强行截断在 15% 的硬限制下，既保留高帧率所需缓存，又彻底消除 2G+ 大显存占用的异常指纹
+        # 🟢 【核心优化】：将 PyTorch 的 CUDA 显存强行截断在 15% 的硬限制下，并开启 CUDNN benchmark 自动优化最优硬件算法
         try:
             if torch.cuda.is_available():
                 torch.cuda.set_per_process_memory_fraction(0.15, 0)
-                torch.backends.cudnn.benchmark = False
-                torch.backends.cudnn.deterministic = True
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.deterministic = False
         except Exception:
             pass
 
@@ -291,32 +291,47 @@ class Detector:
     def draw_results(self, frame, targets):
         for t in targets:
             if config.SHOW_BBOX:
-                # 1. 绘制身体框 (如果有) - 浅绿色
-                if t.get("body_bbox") is not None:
-                    bx1, by1, bx2, by2 = t["body_bbox"]
-                    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (46, 204, 113), 2)
-                
-                # 2. 绘制头部框 (如果有) - 高亮金橙色
-                if t.get("head_bbox") is not None:
-                    hx1, hy1, hx2, hy2 = t["head_bbox"]
-                    cv2.rectangle(frame, (hx1, hy1), (hx2, hy2), (0, 165, 255), 2)
-                
-                # 3. 绘制标签，优先挂在头部框上方，如果没有头部就挂在身体框上方
-                tx1, ty1 = t["head_bbox"][:2] if t.get("head_bbox") is not None else t["body_bbox"][:2]
-                cls_id = t.get("class_id", 0)
-                label_name = "target" if cls_id == 0 else "body"
-                label = f"{label_name} {t['confidence']:.2f}"
-                
-                label_color = (0, 165, 255) if t.get("head_bbox") is not None else (46, 204, 113)
-                cv2.putText(
-                    frame,
-                    label,
-                    (tx1, ty1 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    label_color,
-                    1,
-                )
+                if t.get("is_extrapolated"):
+                    # 5. 绘制航位推算外推框 - 金黄色细线框，展示高智能预测状态
+                    x1, y1, x2, y2 = t["bbox"]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (241, 196, 15), 1)
+                    cv2.putText(
+                        frame,
+                        "predicting...",
+                        (x1, y1 - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4,
+                        (241, 196, 15),
+                        1,
+                    )
+                else:
+                    # 1. 绘制身体框 (如果有) - 浅绿色
+                    if t.get("body_bbox") is not None:
+                        bx1, by1, bx2, by2 = t["body_bbox"]
+                        cv2.rectangle(frame, (bx1, by1), (bx2, by2), (46, 204, 113), 2)
+                    
+                    # 2. 绘制头部框 (如果有) - 高亮金橙色
+                    if t.get("head_bbox") is not None:
+                        hx1, hy1, hx2, hy2 = t["head_bbox"]
+                        cv2.rectangle(frame, (hx1, hy1), (hx2, hy2), (0, 165, 255), 2)
+                    
+                    # 3. 绘制标签，优先挂在头部框上方，如果没有头部就挂在身体框上方
+                    if t.get("head_bbox") is not None or t.get("body_bbox") is not None:
+                        tx1, ty1 = t["head_bbox"][:2] if t.get("head_bbox") is not None else t["body_bbox"][:2]
+                        cls_id = t.get("class_id", 0)
+                        label_name = "target" if cls_id == 0 else "body"
+                        label = f"{label_name} {t['confidence']:.2f}"
+                        
+                        label_color = (0, 165, 255) if t.get("head_bbox") is not None else (46, 204, 113)
+                        cv2.putText(
+                            frame,
+                            label,
+                            (tx1, ty1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            label_color,
+                            1,
+                        )
                 
             # 4. 绘制准星/红点瞄准标记 (红色实心小圆点)
             aim_part = getattr(config, "AIM_PART", "head")
