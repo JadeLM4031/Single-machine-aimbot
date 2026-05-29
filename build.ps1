@@ -18,19 +18,19 @@ New-Item -ItemType Directory -Force -Path .\build\models
 
 # 2. Compile each core module cleanly into build/ as C++ binary DLLs (.pyd)
 Write-Host "[Nuitka Build] Compiling Core UI Module (.pyd)..." -ForegroundColor Cyan
-nuitka --module --show-progress --output-dir=build ui.py
+E:\Python\anaconda3\envs\yolo8-demo\python.exe -m nuitka --module --show-progress --output-dir=build ui.py
 
 Write-Host "[Nuitka Build] Compiling Core Movement Module (.pyd)..." -ForegroundColor Cyan
-nuitka --module --show-progress --output-dir=build mover.py
+E:\Python\anaconda3\envs\yolo8-demo\python.exe -m nuitka --module --show-progress --output-dir=build mover.py
 
 Write-Host "[Nuitka Build] Compiling Core Capture Module (.pyd)..." -ForegroundColor Cyan
-nuitka --module --show-progress --output-dir=build capture.py
+E:\Python\anaconda3\envs\yolo8-demo\python.exe -m nuitka --module --show-progress --output-dir=build capture.py
 
 Write-Host "[Nuitka Build] Compiling Core Config Module (.pyd)..." -ForegroundColor Cyan
-nuitka --module --show-progress --output-dir=build config.py
+E:\Python\anaconda3\envs\yolo8-demo\python.exe -m nuitka --module --show-progress --output-dir=build config.py
 
 Write-Host "[Nuitka Build] Compiling Core Detector Module (.pyd)..." -ForegroundColor Cyan
-nuitka --module --show-progress --output-dir=build detector.py
+E:\Python\anaconda3\envs\yolo8-demo\python.exe -m nuitka --module --show-progress --output-dir=build detector.py
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[Nuitka Build] All C++ binaries generated successfully! Starting automated cleanup..." -ForegroundColor Green
@@ -49,18 +49,44 @@ if ($LASTEXITCODE -eq 0) {
     } elseif (Test-Path .\kmNet.cp310-win_amd64.pyd) {
         Copy-Item -Path .\kmNet.cp310-win_amd64.pyd -Destination .\build\kmNet.pyd -Force
     }
+    if (Test-Path .\tool) {
+        Copy-Item -Path .\tool -Destination .\build\ -Recurse -Force
+    }
 
-    # 5. Generate a robust, double-clickable quiet launcher (.bat) inside ./build/
-    # This automatically activates conda environment, loads all required DLLs, and runs silent pythonw
-    # Using pure English filename to prevent Windows PowerShell encoding issues.
-    $bat_content = @"
+    # 5. 生成高可靠性、双击自动请求管理员权限的启动脚本 (.bat) 到 build 文件夹中
+    # 彻底解决管理员运行后默认路径被 Windows 重置为 System32 导致无法加载相对文件路径的致命 bug
+    # 并且使用绝对路径指向 conda python，100% 避免系统 PATH 环境变量缺失导致的 DLL 载入失败！
+    $bat_content = @'
 @echo off
-:: Automatically activate the conda environment and load python310.dll paths
-call conda.bat activate yolo8-demo
-:: Run pythonw in background (completely disables black console window!)
-start /b pythonw main.py
-exit
-"@
+chcp 65001 >nul
+title System Monitor Launcher
+
+:: 1. Check for administrator privileges. If none, elevate dynamically via PowerShell UAC.
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [System] Requesting Administrator privileges...
+    powershell -Command "Start-Process -FilePath '%0' -Verb RunAs"
+    exit /b
+)
+
+:: 2. Set working directory to the folder where this batch file resides.
+:: This is critical as Windows UAC resets the path to C:\Windows\System32.
+cd /d "%~dp0"
+
+echo ===================================================
+echo   Starting System Monitor (Nuitka C++ Compiled)...
+echo ===================================================
+echo.
+
+:: 3. Directly run the correct absolute Python environment to load C++ dlls without PATH issues.
+"E:\Python\anaconda3\envs\yolo8-demo\python.exe" main.py
+
+if %errorLevel% neq 0 (
+    echo.
+    echo [Error] Program exited with error code: %errorLevel%
+    pause
+)
+'@
     $bat_content | Out-File -FilePath .\build\start_aimbot.bat -Encoding Default
 
     Write-Host "[Nuitka Build] High-Security Isolated Distribution Packaged Successfully!" -ForegroundColor Green

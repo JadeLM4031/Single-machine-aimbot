@@ -125,6 +125,6 @@ def inspect_model(file_path):
 
 if __name__ == "__main__":
     # 🟢 提示：把下面这行改成你实际拿到的模型名字（放同一个文件夹下）
-    TARGET_MODEL = "models/PUBGV8_5w.onnx"
+    TARGET_MODEL = "models/sjz_bb_260305_v11s_320.onnx"
 
     inspect_model(TARGET_MODEL)

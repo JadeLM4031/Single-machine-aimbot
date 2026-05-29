@@ -63,8 +63,8 @@ class OBSCapture:
         )
         self.cap = self
 
-        # 5. 🟢 强行恢复 120 帧高频双缓冲图传流（解决黑屏的核心死穴！）
-        self._camera.start(target_fps=120, video_mode=True)
+        # 5. 🟢 强行恢复 240 帧超高频双缓冲图传流（彻底榨干高刷显示器与显卡性能，解锁极致物理丝滑度！）
+        self._camera.start(target_fps=240, video_mode=True)
 
         config.log(
             f"[Capture] 中心区域截取已启动 - 显示器 {self.camera_index} "

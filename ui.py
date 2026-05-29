@@ -200,7 +200,7 @@ class SoundAlertManager:
         self.enabled = False
         self.last_play_time = 0.0
         self.cooldown = 3.0  # 🟢 战术降频：三秒内最多响一下，绝对防止刷音和噪音干扰
-        self.has_triggered_active = False  # 标志当前波次锁定是否已触发声音提示
+        self.has_triggered_active = False  # 标志当前波次锁定是否已触发/已标记为活跃状态
 
     def trigger(self, count):
         if not self.enabled:
@@ -216,11 +216,18 @@ class SoundAlertManager:
         if count > 0:
             # 只有从 0 个目标变成有目标（即 has_triggered_active 为 False 且首次露头）时才会触发单次提示音
             if not self.has_triggered_active:
+                self.has_triggered_active = True  # 🟢 发生“从无到有”瞬间，立即标记为已活跃，无论冷却通过与否，这一轮都不再重复触发
                 if now - self.last_play_time >= self.cooldown:
                     import winsound
                     import os
                     try:
                         sound_path = getattr(config, "SOUND_FILE", "tool/tip.wav")
+                        # 自动纠偏为以本文件所在目录为基准的绝对路径，确保打包编译或异地执行时 tip.wav 能 100% 被精确定位
+                        if not os.path.isabs(sound_path):
+                            base_dir = os.path.dirname(os.path.abspath(__file__))
+                            abs_path = os.path.join(base_dir, sound_path)
+                            if os.path.exists(abs_path):
+                                sound_path = abs_path
                         if os.path.exists(sound_path):
                             # 播放用户放置的自定义快速 WAV 声音文件
                             winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
@@ -228,7 +235,6 @@ class SoundAlertManager:
                             # 如果未放置，自动降级为系统中最快的 "SystemQuestion"（滴答水滴音）
                             winsound.PlaySound("SystemQuestion", winsound.SND_ALIAS | winsound.SND_ASYNC)
                         self.last_play_time = now
-                        self.has_triggered_active = True
                     except Exception:
                         pass
         else:

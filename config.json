@@ -17,7 +17,7 @@
   "KMBOX_PORT": "64532",
   "KMBOX_MAC": "B7510C3D",
   "KMBOX_SERIAL_PORT": "COM3",
-  "SMOOTH_FACTOR": 0.3,
+  "SMOOTH_FACTOR": 0.5,
   "AIM_TRIGGER_KEY": "xbutton2",
   "AIM_PART": "head",
   "SHOW_PREVIEW": true,
