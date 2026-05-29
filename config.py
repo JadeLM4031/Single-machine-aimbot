@@ -48,6 +48,10 @@ AIM_TRIGGER_KEY = "right_mouse"
 # 瞄准部位: "head" / "neck" / "chest"
 AIM_PART = "head"
 
+# 目标配置
+MODEL_VERSION = "auto"  # "auto" (自动识别) / "new" (新多分类) / "old" (旧双分类)
+TARGET_MODE = "enemy"   # "enemy" / "practice" / "xiaobing" / "daodi" / "duiyou"
+
 # 显示控制
 SHOW_PREVIEW = True
 SHOW_BBOX = True
@@ -80,6 +84,7 @@ def save_config():
         "SMOOTH_FACTOR", "AIM_TRIGGER_KEY", "AIM_PART",
         "SHOW_PREVIEW", "SHOW_BBOX", "SHOW_CROSSHAIR",
         "SHOW_DETECT_REGION", "SHOW_PERF", "SOUND_ALERT",
+        "MODEL_VERSION", "TARGET_MODE",
     ]
     data = {k: globals()[k] for k in keys}
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:

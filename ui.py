@@ -260,6 +260,7 @@ class AimWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._update_classes_and_mode()
 
         self._log_bridge = _LogBridge()
         self._log_bridge.log_signal.connect(self._on_log)
@@ -374,6 +375,20 @@ class AimWindow(QMainWindow):
             part_map.get(getattr(config, "AIM_PART", "head"), 0)
         )
         aim_layout.addWidget(self.combo_part)
+
+        self._add_label(aim_layout, "模型版本")
+        self.combo_model_ver = QComboBox()
+        self.combo_model_ver.addItems(["自动识别", "新多分类模型", "旧双分类模型"])
+        model_ver_map = {"auto": 0, "new": 1, "old": 2}
+        self.combo_model_ver.setCurrentIndex(model_ver_map.get(getattr(config, "MODEL_VERSION", "auto"), 0))
+        aim_layout.addWidget(self.combo_model_ver)
+
+        self._add_label(aim_layout, "目标模式")
+        self.combo_target_mode = QComboBox()
+        self.combo_target_mode.addItems(["敌人 (Enemy)", "靶场 (Practice)", "小兵 (Minion)", "倒地 (Downed)", "队友 (Teammate)"])
+        target_mode_map = {"enemy": 0, "practice": 1, "xiaobing": 2, "daodi": 3, "duiyou": 4}
+        self.combo_target_mode.setCurrentIndex(target_mode_map.get(getattr(config, "TARGET_MODE", "enemy"), 0))
+        aim_layout.addWidget(self.combo_target_mode)
 
         self._add_label(aim_layout, "平滑度")
         smooth_row = QHBoxLayout()
@@ -507,6 +522,8 @@ class AimWindow(QMainWindow):
         self.combo_mouse.currentIndexChanged.connect(self._on_mouse_mode_changed)
         self.combo_trigger.currentIndexChanged.connect(self._on_trigger_changed)
         self.combo_part.currentIndexChanged.connect(self._on_part_changed)
+        self.combo_model_ver.currentIndexChanged.connect(self._on_model_ver_changed)
+        self.combo_target_mode.currentIndexChanged.connect(self._on_target_mode_changed)
         self.slider_smooth.valueChanged.connect(self._on_smooth_changed)
         self.slider_conf.valueChanged.connect(self._on_conf_changed)
         self.btn_model.clicked.connect(self._on_browse_model)
@@ -548,6 +565,7 @@ class AimWindow(QMainWindow):
             self.capture.open()
             self.detector.model_path = config.MODEL_PATH
             self.detector.load()
+            self._update_classes_and_mode()
 
             kwargs = {}
             if config.MOUSE_MODE == "kmbox_net":
@@ -839,8 +857,8 @@ class AimWindow(QMainWindow):
                             self.mover.pid_x.reset()
                             self.mover.pid_y.reset()
                         else:
-                            # 🟢 终极时序重构：打乱10ms刚性发包特征，随机分布在人类高频极限的 13ms~21ms 之间，服务器大数据行为审计 100% 判定绿标人类
-                            if now - last_move_time > random.uniform(0.013, 0.021):
+                            # 🟢 帧率利用率极限优化：消除多余的强制休眠，直接贴合 YOLO 自然推理帧率，实现全速、高频的无缝跟枪
+                            if now - last_move_time > 0.003:
                                 sigmoid_factor = 0.65 + 0.35 * (distance**2) / (
                                     distance**2 + 144.0
                                 )
@@ -1049,6 +1067,47 @@ class AimWindow(QMainWindow):
             time.sleep(0.1)
             self.capture.open()
 
+    def _on_model_ver_changed(self, idx):
+        self._update_classes_and_mode()
+
+    def _on_target_mode_changed(self, idx):
+        self._update_classes_and_mode()
+
+    def _update_classes_and_mode(self):
+        # 1. 获取选中的模型版本
+        idx_ver = self.combo_model_ver.currentIndex()
+        ver_map = {0: "auto", 1: "new", 2: "old"}
+        config.MODEL_VERSION = ver_map.get(idx_ver, "auto")
+        
+        # 2. 判断当前的实际模型版本 (若为 auto，如果 detector 已经加载并识别出了，就用 detector 的；否则默认用 old 以防越界)
+        active_ver = config.MODEL_VERSION
+        if active_ver == "auto":
+            active_ver = getattr(self.detector, "detected_model_ver", "old")
+            
+        # 3. 动态控制目标模式的选择状态与范围
+        if active_ver == "old":
+            # 旧模型仅支持 0: head, 1: body，即 "敌人 (Enemy)" 模式。其他模式强行置空/灰色禁用
+            self.combo_target_mode.setCurrentIndex(0)
+            self.combo_target_mode.setEnabled(False)
+            config.TARGET_MODE = "enemy"
+            config.TARGET_CLASSES = [0, 1]
+        else:
+            # 新多分类模型开启所有选项
+            self.combo_target_mode.setEnabled(True)
+            idx_mode = self.combo_target_mode.currentIndex()
+            mode_map = {0: "enemy", 1: "practice", 2: "xiaobing", 3: "daodi", 4: "duiyou"}
+            config.TARGET_MODE = mode_map.get(idx_mode, "enemy")
+            
+            # 根据模式更新检测类别
+            class_map = {
+                "enemy": [0, 1],
+                "practice": [5, 6],
+                "xiaobing": [3],
+                "daodi": [4],
+                "duiyou": [2]
+            }
+            config.TARGET_CLASSES = class_map.get(config.TARGET_MODE, [0, 1])
+
     def _on_save_config(self):
         trigger_keys = ["right_mouse", "ctrl", "shift", "alt", "xbutton"]
         if self.combo_trigger.currentIndex() < len(trigger_keys):
@@ -1056,6 +1115,9 @@ class AimWindow(QMainWindow):
         parts = ["head", "neck", "chest"]
         if self.combo_part.currentIndex() < len(parts):
             config.AIM_PART = parts[self.combo_part.currentIndex()]
+            
+        self._update_classes_and_mode()
+        
         config.MODEL_PATH = self.edit_model.text()
         config.KMBOX_IP = self.edit_ip.text()
         config.KMBOX_PORT = self.edit_port.text()

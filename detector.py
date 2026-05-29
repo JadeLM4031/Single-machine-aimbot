@@ -17,6 +17,7 @@ class Detector:
         self.confidence = config.CONFIDENCE_THRESHOLD
         self.target_classes = config.TARGET_CLASSES
         self.detect_size = 320
+        self.detected_model_ver = "old"  # 新增：记录自动检测出的版本
         
         # 🟢 【核心优化】：将 PyTorch 的 CUDA 显存强行截断在 40% 的硬限制下，并开启 CUDNN benchmark 自动优化最优硬件算法
         try:
@@ -47,6 +48,7 @@ class Detector:
             self.model = YOLO(self.model_path)
             self.model_type = "v8"
             config.log(f"[Module] Telemetry engine initialized successfully ({self.device})")
+            self.detect_signature()
             return
         except Exception as e:
             # 🟢 别用 pass 默默吃掉，把真正的报错打印出来，如果是缺 onnx 库一眼就能看到！
@@ -69,11 +71,47 @@ class Detector:
             self.model.conf = self.confidence
             self.model_type = "v5"
             config.log(f"[Module] Legacy telemetry engine initialized successfully ({self.device})")
+            self.detect_signature()
             return
         except Exception as e:
             raise RuntimeError(f"模型加载失败，v8 和 v5 均不支持: {e}")
 
+    def detect_signature(self):
+        """模型指纹签名自动识别 - 通过类别名称字典判定是新模型还是旧模型"""
+        self.detected_model_ver = "old"  # 默认降级为旧模型
+        if self.model is None:
+            return
+            
+        try:
+            names = getattr(self.model, "names", None)
+            if not names:
+                # 兼容不同结构的 YOLO 模型（例如 model.model.names）
+                model_attr = getattr(self.model, "model", None)
+                if model_attr:
+                    names = getattr(model_attr, "names", None)
+            
+            if names:
+                config.log(f"[Module] Loaded model classes: {names}")
+                # 检查是否存在 "direntoubu" 字符串（无论是字典值还是列表元素）
+                has_new_tag = False
+                if isinstance(names, dict):
+                    has_new_tag = any("direntoubu" in str(v).lower() for v in names.values())
+                elif isinstance(names, list):
+                    has_new_tag = any("direntoubu" in str(v).lower() for v in names)
+                
+                if has_new_tag:
+                    self.detected_model_ver = "new"
+                    config.log("🚨 [Module] 检测到新版多分类模型签名 ('direntoubu')，自动启用新多分类适配逻辑")
+                else:
+                    self.detected_model_ver = "old"
+                    config.log("🟢 [Module] 未检测到新模型签名，自动启用旧版双分类兼容逻辑 (0: head, 1: body)")
+            else:
+                config.log("[Module] 无法读取模型类别名称字典，默认启用旧版双分类逻辑")
+        except Exception as e:
+            config.log(f"[Module] 读取模型指纹特征时发生异常 (默认启用旧版兼容): {e}")
+
     def detect(self, frame):
+        self.target_classes = getattr(config, "TARGET_CLASSES", [0, 1])
         if self.model is None:
             return []
 
@@ -139,108 +177,131 @@ class Detector:
 
     def _process_detections(self, detections):
         """
-        处理检测结果（专职 Head-Body 双类配对模式）：
-        索引 0 为 head，索引 1 为 body。采用高度优化的距离邻域启发式算法进行 head 和 body 配对。
+        根据当前模型版本 (新/旧) 及目标模式 (敌人/小兵/倒地/队友/靶场) 动态重构配对逻辑
         """
+        # 1. 决定当前最终使用的模型版本 (优先使用手动强制覆盖的 config.MODEL_VERSION，若为 "auto" 则使用自动识别的)
+        model_ver = getattr(config, "MODEL_VERSION", "auto")
+        if model_ver == "auto":
+            model_ver = self.detected_model_ver
+            
+        target_mode = getattr(config, "TARGET_MODE", "enemy")
+
+        # 2. 动态指定当前需要过滤并配对的头部和身体标签
+        if model_ver == "old":
+            head_class = 0
+            body_class = 1
+        else:  # new
+            if target_mode == "enemy":
+                head_class = 1
+                body_class = 0
+            elif target_mode == "practice":
+                head_class = 6
+                body_class = 5
+            elif target_mode == "xiaobing":
+                head_class = None
+                body_class = 3
+            elif target_mode == "daodi":
+                head_class = None
+                body_class = 4
+            elif target_mode == "duiyou":
+                head_class = None
+                body_class = 2
+            else:
+                head_class = 1
+                body_class = 0
+
         heads = []
         bodies = []
         for det in detections:
             cls_id = det["cls_id"]
-            if cls_id == 0:
+            if head_class is not None and cls_id == head_class:
                 heads.append(det)
-            elif cls_id == 1:
+            elif body_class is not None and cls_id == body_class:
                 bodies.append(det)
 
         targets = []
         paired_bodies = set()
 
-        # 1. 尝试将每个 head 配对到最临近的 body
-        for head in heads:
-            hx1, hy1, hx2, hy2 = head["box"]
-            hcx = (hx1 + hx2) / 2
-            hcy = (hy1 + hy2) / 2
-            h_w = hx2 - hx1
-            h_h = hy2 - hy1
+        # 3. 智能头身融合配对算法 (针对双部位目标)
+        if head_class is not None:
+            for head in heads:
+                hx1, hy1, hx2, hy2 = head["box"]
+                hcx = (hx1 + hx2) / 2
+                hcy = (hy1 + hy2) / 2
+                h_w = hx2 - hx1
+                h_h = hy2 - hy1
 
-            best_body = None
-            min_dist = float("inf")
+                best_body = None
+                min_dist = float("inf")
 
-            for idx, body in enumerate(bodies):
-                if idx in paired_bodies:
-                    continue
-                bx1, by1, bx2, by2 = body["box"]
-                bcx = (bx1 + bx2) / 2
-                
-                # 身体上部中心点 (颈部附近)
-                body_top_cx = bcx
-                body_top_cy = by1
+                for idx, body in enumerate(bodies):
+                    if idx in paired_bodies:
+                        continue
+                    bx1, by1, bx2, by2 = body["box"]
+                    bcx = (bx1 + bx2) / 2
+                    
+                    body_top_cx = bcx
+                    body_top_cy = by1
 
-                # 计算头部中心到身体顶部的欧氏距离
-                dist = np.sqrt((hcx - body_top_cx)**2 + (hcy - body_top_cy)**2)
-                
-                # 距离门限：头部和身体的间距不能太离谱 (限制在身体宽度的 1.8 倍或 200 像素内)
-                max_allowed_dist = max(200.0, (bx2 - bx1) * 1.8)
-                if dist < max_allowed_dist and dist < min_dist:
-                    min_dist = dist
-                    best_body = (idx, body)
+                    dist = np.sqrt((hcx - body_top_cx)**2 + (hcy - body_top_cy)**2)
+                    max_allowed_dist = max(200.0, (bx2 - bx1) * 1.8)
+                    if dist < max_allowed_dist and dist < min_dist:
+                        min_dist = dist
+                        best_body = (idx, body)
 
-            if best_body is not None:
-                body_idx, body = best_body
-                paired_bodies.add(body_idx)
-                
-                # 完美配对：融合两者坐标
-                bx1, by1, bx2, by2 = body["box"]
-                x1 = min(hx1, bx1)
-                y1 = min(hy1, by1)
-                x2 = max(hx2, bx2)
-                y2 = max(hy2, by2)
-                
-                # 头部点：绝对精准的 head 框中心
-                head_x = hcx
-                head_y = hcy
-                
-                # 🔴 骨骼生理学坐标精准修复：
-                # 颈部 (Neck)：人眼/颈椎连接线，位于头部框底边下方的 0.20 倍头高 (H)
-                neck_x = hcx
-                neck_y = hy2 + h_h * 0.20
-                
-                # 胸部 (Chest)：心肺胸膛中心，位于头部框底边下方约 0.95 倍头高 (H)，落入上胸腔
-                chest_x = hcx
-                chest_y = hy2 + h_h * 0.95
-                
-                targets.append({
-                    "bbox": (int(x1), int(y1), int(x2), int(y2)),
-                    "head_bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
-                    "body_bbox": (int(bx1), int(by1), int(bx2), int(by2)),
-                    "center": (int((x1 + x2) / 2), int((y1 + y2) / 2)),
-                    "head": (int(head_x), int(head_y)),
-                    "neck": (int(neck_x), int(neck_y)),
-                    "chest": (int(chest_x), int(chest_y)),
-                    "confidence": max(head["conf"], body["conf"]),
-                    "class_id": 0,  # 统一归类为 0 (代表有头有身体的完整目标)
-                    "area": int((x2 - x1) * (y2 - y1)),
-                })
-            else:
-                # 未配对成功的独立头部 (比如只露出了头)
-                neck_x = hcx
-                neck_y = hy2 + h_h * 0.20
-                chest_x = hcx
-                chest_y = hy2 + h_h * 0.95
-                
-                targets.append({
-                    "bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
-                    "head_bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
-                    "body_bbox": None,
-                    "center": (int(hcx), int(hcy)),
-                    "head": (int(hcx), int(hcy)),
-                    "neck": (int(neck_x), int(neck_y)),
-                    "chest": (int(chest_x), int(chest_y)),
-                    "confidence": head["conf"],
-                    "class_id": 0,
-                    "area": int(h_w * h_h),
-                })
+                if best_body is not None:
+                    body_idx, body = best_body
+                    paired_bodies.add(body_idx)
+                    
+                    bx1, by1, bx2, by2 = body["box"]
+                    x1 = min(hx1, bx1)
+                    y1 = min(hy1, by1)
+                    x2 = max(hx2, bx2)
+                    y2 = max(hy2, by2)
+                    
+                    # 绝对精准头部点
+                    head_x = hcx
+                    head_y = hcy
+                    
+                    # 生理坐标修正
+                    neck_x = hcx
+                    neck_y = hy2 + h_h * 0.20
+                    chest_x = hcx
+                    chest_y = hy2 + h_h * 0.95
+                    
+                    targets.append({
+                        "bbox": (int(x1), int(y1), int(x2), int(y2)),
+                        "head_bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
+                        "body_bbox": (int(bx1), int(by1), int(bx2), int(by2)),
+                        "center": (int((x1 + x2) / 2), int((y1 + y2) / 2)),
+                        "head": (int(head_x), int(head_y)),
+                        "neck": (int(neck_x), int(neck_y)),
+                        "chest": (int(chest_x), int(chest_y)),
+                        "confidence": max(head["conf"], body["conf"]),
+                        "class_id": 0,  # 0 代表有头有身体的完整目标
+                        "area": int((x2 - x1) * (y2 - y1)),
+                    })
+                else:
+                    # 独立头部（比如只露出头）
+                    neck_x = hcx
+                    neck_y = hy2 + h_h * 0.20
+                    chest_x = hcx
+                    chest_y = hy2 + h_h * 0.95
+                    
+                    targets.append({
+                        "bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
+                        "head_bbox": (int(hx1), int(hy1), int(hx2), int(hy2)),
+                        "body_bbox": None,
+                        "center": (int(hcx), int(hcy)),
+                        "head": (int(hcx), int(hcy)),
+                        "neck": (int(neck_x), int(neck_y)),
+                        "chest": (int(chest_x), int(chest_y)),
+                        "confidence": head["conf"],
+                        "class_id": 0,
+                        "area": int(h_w * h_h),
+                    })
 
-        # 2. 处理未配对成功的独立身体 (比如头部被掩盖，或者只有身体)
+        # 4. 独立身体目标（针对未配对上的身体，或者单部位目标：小兵/队友/倒地等）
         for idx, body in enumerate(bodies):
             if idx in paired_bodies:
                 continue
@@ -250,10 +311,9 @@ class Detector:
             b_w = bx2 - bx1
             b_h = by2 - by1
 
-            # 估算头高为身体高度的 15% (标准比例)
+            # 如果没有头部类别，或者未配对成功，则根据解剖学比例估算
             h_h_est = b_h * 0.15
 
-            # 向上估算头部点 (肩膀线往上 0.5 倍头高)，向下估算颈部、胸部
             head_x = bcx
             head_y = by1 - h_h_est * 0.50
             neck_x = bcx
@@ -270,17 +330,15 @@ class Detector:
                 "neck": (int(neck_x), int(neck_y)),
                 "chest": (int(chest_x), int(chest_y)),
                 "confidence": body["conf"],
-                "class_id": 1,  # 独立身体归类为 1
+                "class_id": 1,  # 1 代表独立身体
                 "area": int(b_w * b_h),
             })
 
-        # 3. 🔴 终极手感优化：将目标列表按照“离当前屏幕准心（即 320x320 画面中心点）的几何距离”进行升序排序
-        # 画面中心坐标为 (160, 160) (假设 self.detect_size 是 320)
+        # 5. 准心排序算法
         cx = self.detect_size // 2
         cy = self.detect_size // 2
 
         def get_dist_to_crosshair(t):
-            # 获取用户选中的具体部位，用于最精准的距离算定
             aim_part = getattr(config, "AIM_PART", "head")
             aim_pt = t.get(aim_part, t["head"])
             return np.sqrt((aim_pt[0] - cx)**2 + (aim_pt[1] - cy)**2)

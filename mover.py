@@ -40,8 +40,11 @@ class PythonAdaptivePID:
         self.smooth_factor = 0.6  # 低通滤波平滑因子
 
     def update(self, error, dt, target_w=80, img_size=2560.0):
-        if dt <= 0:
-            dt = 0.001
+        # 使用低通滤波平滑时间差，避免单机线程调度微小波动（如 1ms ~ 30ms 突变）导致的微分项爆炸
+        if not hasattr(self, "_smoothed_dt"):
+            self._smoothed_dt = 0.010
+        self._smoothed_dt = 0.9 * self._smoothed_dt + 0.1 * dt
+        dt_calc = max(0.005, min(0.030, self._smoothed_dt))
 
         if self.last_error is None:
             self.last_error = error
@@ -73,16 +76,16 @@ class PythonAdaptivePID:
                 self.integral = 0
 
         # 3. PID 核心计算
-        err_rate = (error - self.last_error) / dt
+        err_rate = (error - self.last_error) / dt_calc
 
         if self.is_reached:
-            self.integral += error * dt
+            self.integral += error * dt_calc
             self.integral = max(-100.0, min(100.0, self.integral))  # Anti-windup 限幅
             i_out = self.ki * self.integral
             p_out = self.kp * error
             d_out = self.kd * err_rate
         else:
-            self.integral += (error * 0.5) * dt
+            self.integral += (error * 0.5) * dt_calc
             self.integral = max(-100.0, min(100.0, self.integral))
             i_out = self.ki * self.integral
             p_out = (self.kp * 0.5) * error
@@ -99,6 +102,8 @@ class PythonAdaptivePID:
         self.last_error = None
         self.stable_count = 0
         self.is_reached = False
+        if hasattr(self, "_smoothed_dt"):
+            delattr(self, "_smoothed_dt")
 
 
 class OUNoise:
@@ -106,7 +111,7 @@ class OUNoise:
     用于完美模拟人类生理性肌肉微颤抖动 (具有均值回归特性，物理防封)
     """
 
-    def __init__(self, theta=0.25, mu=0.0, sigma=0.35):
+    def __init__(self, theta=0.25, mu=0.0, sigma=0.08):
         self.theta = theta
         self.mu = mu
         self.sigma = sigma
@@ -128,13 +133,13 @@ class MouseController:
         self._kmbox_serial_conn = None
         self._kmbox_net_ready = False
 
-        # 🟢 犀利修复：Kp(比例增益)调升至 0.28 磁性变强；Kd(微分刹车)调高到 0.0045，利用阻尼消除高频拉枪过头的剧烈抖动
-        self.pid_x = PythonAdaptivePID(0.28, 0.0, 0.0045)
-        self.pid_y = PythonAdaptivePID(0.28, 0.0, 0.0045)
+        # 🟢 极速优化：提升 Kp 以获得更强的磁性锁定，调高 Kd 并通过平滑 dt 让刹车更平稳
+        self.pid_x = PythonAdaptivePID(0.28, 0.0, 0.005)
+        self.pid_y = PythonAdaptivePID(0.28, 0.0, 0.005)
         self.last_pid_time = time.time()
 
-        self.ou_x = OUNoise(theta=0.25, mu=0.0, sigma=0.35)
-        self.ou_y = OUNoise(theta=0.25, mu=0.0, sigma=0.35)
+        self.ou_x = OUNoise(theta=0.25, mu=0.0, sigma=0.08)
+        self.ou_y = OUNoise(theta=0.25, mu=0.0, sigma=0.08)
 
     def connect(self):
         self.close()
