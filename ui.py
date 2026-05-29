@@ -41,20 +41,24 @@ except ImportError:
 
 LIGHT_STYLE = """
 QMainWindow, QWidget {
-    background-color: #f5f7fa;
-    color: #2c3e50;
+    background-color: #f8fafc;
+    color: #0f172a;
     font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
     font-size: 12px;
 }
+QScrollArea {
+    background-color: #f8fafc;
+    border: none;
+}
 QGroupBox {
     background-color: #ffffff;
-    border: 1px solid #e1e8ed;
-    border-radius: 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
     margin-top: 14px;
-    padding: 16px 10px 10px 10px;
+    padding: 16px 14px 12px 14px;
     font-weight: bold;
-    font-size: 12px;
-    color: #3498db;
+    font-size: 13px;
+    color: #4f46e5;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
@@ -63,71 +67,126 @@ QGroupBox::title {
 }
 QPushButton {
     background-color: #ffffff;
-    color: #2c3e50;
-    border: 1px solid #dce1e6;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
     border-radius: 8px;
-    padding: 7px 16px;
+    padding: 8px 16px;
     font-size: 12px;
+    font-weight: bold;
 }
 QPushButton:hover {
-    background-color: #eaf2fb;
-    border-color: #3498db;
-    color: #3498db;
+    background-color: #f1f5f9;
+    border-color: #4f46e5;
+    color: #4f46e5;
+}
+QPushButton:pressed {
+    background-color: #e2e8f0;
 }
 QComboBox {
     background-color: #ffffff;
-    color: #2c3e50;
-    border: 1px solid #dce1e6;
-    border-radius: 6px;
-    padding: 4px 8px;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 5px 10px;
+}
+QComboBox:hover {
+    border-color: #4f46e5;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left-width: 0px;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    selection-background-color: #f1f5f9;
+    selection-color: #4f46e5;
 }
 QSlider::groove:horizontal {
-    background: #e1e8ed;
+    background: #e2e8f0;
     height: 6px;
     border-radius: 3px;
 }
 QSlider::handle:horizontal {
-    background: #3498db;
+    background: #4f46e5;
     width: 16px;
     height: 16px;
     margin: -5px 0;
     border-radius: 8px;
 }
+QSlider::handle:horizontal:hover {
+    background: #4338ca;
+}
 QSlider::sub-page:horizontal {
-    background: #3498db;
+    background: #4f46e5;
     border-radius: 3px;
 }
 QCheckBox {
-    color: #5a6c7d;
+    color: #64748b;
     spacing: 8px;
-    font-size: 11px;
+    font-size: 12px;
+}
+QCheckBox:hover {
+    color: #0f172a;
 }
 QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 2px solid #c8d1da;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 2px solid #cbd5e1;
     background-color: #ffffff;
 }
+QCheckBox::indicator:hover {
+    border-color: #4f46e5;
+}
 QCheckBox::indicator:checked {
-    background-color: #3498db;
-    border-color: #3498db;
+    background-color: #4f46e5;
+    border-color: #4f46e5;
 }
 QLineEdit {
     background-color: #ffffff;
-    color: #2c3e50;
-    border: 1px solid #dce1e6;
-    border-radius: 6px;
-    padding: 4px 8px;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 5px 10px;
+}
+QLineEdit:focus {
+    border-color: #4f46e5;
 }
 QTextEdit {
     background-color: #1e1e2e;
     color: #a6e3a1;
     border: 1px solid #313244;
-    border-radius: 6px;
-    padding: 4px 6px;
+    border-radius: 10px;
+    padding: 6px 10px;
     font-family: Consolas, monospace;
     font-size: 11px;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+    margin: 0px;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: #cbd5e1;
+    min-height: 20px;
+    border-radius: 3px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
 }
 """
 
@@ -138,71 +197,46 @@ class _LogBridge(QObject):
 
 class SoundAlertManager:
     def __init__(self):
-        import queue
-
         self.enabled = False
-        self.queue = queue.Queue(maxsize=1)
-        self.last_count = 0
         self.last_play_time = 0.0
-        self.cooldown = 1.0
-        self.zero_since = 0.0
-        self.zero_grace = 0.150
-        self.running = True
-        self.thread = threading.Thread(target=self._worker, daemon=True)
-        self.thread.start()
+        self.cooldown = 3.0  # 🟢 战术降频：三秒内最多响一下，绝对防止刷音和噪音干扰
+        self.has_triggered_active = False  # 标志当前波次锁定是否已触发声音提示
 
     def trigger(self, count):
         if not self.enabled:
             return
+        
+        # 🟢 战术优先过滤：只有在目标模式为“敌人(enemy)”时才发声警报，靶场、小兵、队友等其它模式保持 100% 绝对静音
+        if getattr(config, "TARGET_MODE", "enemy") != "enemy":
+            self.has_triggered_active = False
+            return
+            
         now = time.time()
+        
         if count > 0:
-            self.zero_since = 0.0
-            if count != self.last_count:
-                if now - self.last_play_time >= self.cooldown or self.last_count == 0:
+            # 只有从 0 个目标变成有目标（即 has_triggered_active 为 False 且首次露头）时才会触发单次提示音
+            if not self.has_triggered_active:
+                if now - self.last_play_time >= self.cooldown:
+                    import winsound
+                    import os
                     try:
-                        self.queue.put_nowait(count)
+                        sound_path = getattr(config, "SOUND_FILE", "tool/tip.wav")
+                        if os.path.exists(sound_path):
+                            # 播放用户放置的自定义快速 WAV 声音文件
+                            winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        else:
+                            # 如果未放置，自动降级为系统中最快的 "SystemQuestion"（滴答水滴音）
+                            winsound.PlaySound("SystemQuestion", winsound.SND_ALIAS | winsound.SND_ASYNC)
+                        self.last_play_time = now
+                        self.has_triggered_active = True
                     except Exception:
-                        try:
-                            self.queue.get_nowait()
-                            self.queue.put_nowait(count)
-                        except Exception:
-                            pass
+                        pass
         else:
-            if self.last_count > 0:
-                if self.zero_since == 0.0:
-                    self.zero_since = now
-                elif now - self.zero_since >= self.zero_grace:
-                    self.last_count = 0
-                    self.zero_since = 0.0
-
-    def _worker(self):
-        import winsound
-
-        while self.running:
-            try:
-                count = self.queue.get(timeout=0.1)
-            except Exception:
-                continue
-            if not self.running:
-                break
-            try:
-                if count == 1:
-                    winsound.Beep(800, 60)
-                elif count == 2:
-                    winsound.Beep(1200, 60)
-                elif count == 3:
-                    winsound.Beep(1600, 60)
-                elif count >= 4:
-                    winsound.Beep(2000, 45)
-                    time.sleep(0.01)
-                    winsound.Beep(2000, 45)
-            except Exception:
-                pass
-            self.last_play_time = time.time()
-            self.last_count = count
+            # 目标完全消失后，重置触发标志，等待下一次“从0到有”的瞬时露头再次警报
+            self.has_triggered_active = False
 
     def close(self):
-        self.running = False
+        pass
 
 
 class AimWindow(QMainWindow):
@@ -221,7 +255,6 @@ class AimWindow(QMainWindow):
             "Realtek Audio Universal Service",
         ]
         config.WINDOW_TITLE = rand_mod.choice(fake_titles)
-        self.setWindowTitle(config.WINDOW_TITLE)
         self.setMinimumSize(1120, 680)
         self.setStyleSheet(LIGHT_STYLE)
 
@@ -268,6 +301,11 @@ class AimWindow(QMainWindow):
 
         self.frame_ready.connect(self._on_frame_ready)
 
+        # 🟢 定时异步刷新 UI 状态信息（每 100ms 刷新一次，确保关闭画面预览时文字指标依然活跃刷新）
+        self.stats_timer = QTimer(self)
+        self.stats_timer.timeout.connect(self._update_ui_stats)
+        self.stats_timer.start(100)
+
     def eventFilter(self, obj, event):
         if isinstance(obj, (QComboBox, QSlider)):
             if event.type() == QEvent.Type.Wheel:
@@ -288,7 +326,7 @@ class AimWindow(QMainWindow):
 
         header = QLabel("SYSTEM  MONITOR")
         header.setStyleSheet(
-            "color: #3498db; font-size: 20px; font-weight: bold; letter-spacing: 6px; padding: 6px 0;"
+            "color: #4f46e5; font-size: 20px; font-weight: bold; letter-spacing: 6px; padding: 6px 0;"
         )
         header.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(header)
@@ -297,13 +335,13 @@ class AimWindow(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumSize(640, 480)
         self.preview_label.setStyleSheet(
-            "background-color: #eef1f5; color: #b0b8c1; border: 1px solid #dce1e6; border-radius: 10px; font-size: 14px;"
+            "background-color: #e2e8f0; color: #64748b; border: 1px solid #cbd5e1; border-radius: 12px; font-size: 14px;"
         )
         left_layout.addWidget(self.preview_label, stretch=1)
 
         status_bar = QFrame()
         status_bar.setStyleSheet(
-            "QFrame { background-color: #ffffff; border: 1px solid #e1e8ed; border-radius: 8px; padding: 4px 12px; }"
+            "QFrame { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 4px 12px; }"
         )
         status_bar.setFixedHeight(34)
         status_layout = QHBoxLayout(status_bar)
@@ -311,19 +349,19 @@ class AimWindow(QMainWindow):
 
         self.lbl_status = QLabel("状态: 未启动")
         self.lbl_status.setStyleSheet(
-            "color: #a0aab4; font-size: 11px; font-weight: bold;"
+            "color: #64748b; font-size: 11px; font-weight: bold;"
         )
         self.lbl_fps = QLabel("FPS: --")
         self.lbl_fps.setStyleSheet(
-            "color: #27ae60; font-size: 11px; font-weight: bold;"
+            "color: #10b981; font-size: 11px; font-weight: bold;"
         )
         self.lbl_det = QLabel("检测: --")
         self.lbl_det.setStyleSheet(
-            "color: #e67e22; font-size: 11px; font-weight: bold;"
+            "color: #fb923c; font-size: 11px; font-weight: bold;"
         )
         self.lbl_targets = QLabel("目标: 0")
         self.lbl_targets.setStyleSheet(
-            "color: #3498db; font-size: 11px; font-weight: bold;"
+            "color: #3b82f6; font-size: 11px; font-weight: bold;"
         )
 
         status_layout.addWidget(self.lbl_status)
@@ -344,16 +382,18 @@ class AimWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedWidth(340)  # 🟢 固定滚动区宽度，彻底解决滚动条遮挡组件问题
 
         panel = QWidget()
-        panel.setMinimumWidth(280)
+        panel.setFixedWidth(316)   # 🟢 面板精确适配滚动区，留出滚动条完美通道
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(8)
+        panel_layout.setSpacing(12) # 🟢 增加间距使界面更具透气呼吸感
+        panel_layout.setContentsMargins(10, 10, 10, 10)
 
         self.btn_toggle = QPushButton("▶  开始")
         self.btn_toggle.setFixedHeight(44)
         self.btn_toggle.setStyleSheet(
-            "QPushButton { font-size: 14px; font-weight: bold; background-color: #27ae60; color: white; border: none; border-radius: 10px; }"
+            "QPushButton { font-size: 14px; font-weight: bold; background-color: #10b981; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #059669; }"
         )
         panel_layout.addWidget(self.btn_toggle)
 
@@ -362,8 +402,16 @@ class AimWindow(QMainWindow):
 
         self._add_label(aim_layout, "触发键")
         self.combo_trigger = QComboBox()
-        self.combo_trigger.addItems(["鼠标右键", "Ctrl", "Shift", "Alt", "鼠标侧键"])
-        trigger_map = {"right_mouse": 0, "ctrl": 1, "shift": 2, "alt": 3, "xbutton": 4}
+        self.combo_trigger.addItems(["鼠标右键", "Ctrl", "Shift", "Alt", "鼠标侧键1", "鼠标侧键2"])
+        trigger_map = {
+            "right_mouse": 0,
+            "ctrl": 1,
+            "shift": 2,
+            "alt": 3,
+            "xbutton1": 4,
+            "xbutton2": 5,
+            "xbutton": 4,
+        }
         self.combo_trigger.setCurrentIndex(trigger_map.get(config.AIM_TRIGGER_KEY, 0))
         aim_layout.addWidget(self.combo_trigger)
 
@@ -559,6 +607,17 @@ class AimWindow(QMainWindow):
         self.detector.confidence = config.CONFIDENCE_THRESHOLD
         self.lbl_conf.setText(f"{config.CONFIDENCE_THRESHOLD:.1f}")
 
+    def _on_sound_alert_toggled(self, checked):
+        config.SOUND_ALERT = checked
+        if hasattr(self, "sound_manager"):
+            self.sound_manager.enabled = checked
+
+    def _toggle_run(self):
+        if self.running:
+            self._stop()
+        else:
+            self._start()
+
     def _start(self):
         try:
             config.MODEL_PATH = self.edit_model.text()
@@ -596,11 +655,11 @@ class AimWindow(QMainWindow):
         self.running = True
         self.btn_toggle.setText("■  停止")
         self.btn_toggle.setStyleSheet(
-            "QPushButton { font-size: 14px; font-weight: bold; background-color: #e74c3c; color: white; border: none; border-radius: 10px; }"
+            "QPushButton { font-size: 14px; font-weight: bold; background-color: #ef4444; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #dc2626; }"
         )
         self.lbl_status.setText("状态: 运行中")
         self.lbl_status.setStyleSheet(
-            "color: #27ae60; font-size: 11px; font-weight: bold;"
+            "color: #10b981; font-size: 11px; font-weight: bold;"
         )
         threading.Thread(target=self._detect_loop, daemon=True).start()
 
@@ -610,11 +669,11 @@ class AimWindow(QMainWindow):
         self.mover.close()
         self.btn_toggle.setText("▶  开始")
         self.btn_toggle.setStyleSheet(
-            "QPushButton { font-size: 14px; font-weight: bold; background-color: #27ae60; color: white; border: none; border-radius: 10px; }"
+            "QPushButton { font-size: 14px; font-weight: bold; background-color: #10b981; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #059669; }"
         )
         self.lbl_status.setText("状态: 已停止")
         self.lbl_status.setStyleSheet(
-            "color: #a0aab4; font-size: 11px; font-weight: bold;"
+            "color: #94a3b8; font-size: 11px; font-weight: bold;"
         )
         self.lbl_fps.setText("FPS: --")
         self.lbl_det.setText("检测: --")
@@ -624,6 +683,7 @@ class AimWindow(QMainWindow):
     def _detect_loop(self):
         last_move_time = 0
         last_frame_ptr = None
+        last_preview_time = 0.0
 
         while self.running:
             try:
@@ -877,8 +937,9 @@ class AimWindow(QMainWindow):
                         self.mover.pid_y.reset()
                         self.pid_active = False
 
-                if config.SHOW_PREVIEW:
+                if config.SHOW_PREVIEW and (now - last_preview_time > 0.033):
                     self.frame_ready.emit(crop.copy(), list(targets))
+                    last_preview_time = now
             except Exception as e:
                 QTimer.singleShot(0, lambda: self.log(f"运行错误: {e}"))
             time.sleep(0.001)
@@ -941,6 +1002,10 @@ class AimWindow(QMainWindow):
                     return bool(kmNet.isdown_keyboard(225))
                 elif key == "alt":
                     return bool(kmNet.isdown_keyboard(226))
+                elif key == "xbutton1":
+                    return bool(kmNet.isdown(4))
+                elif key == "xbutton2":
+                    return bool(kmNet.isdown(5))
                 elif key == "xbutton":
                     return bool(kmNet.isdown(4) or kmNet.isdown(5))
             except Exception:
@@ -957,8 +1022,15 @@ class AimWindow(QMainWindow):
             return bool(win32api.GetAsyncKeyState(win32con.VK_SHIFT) & 0x8000)
         elif key == "alt":
             return bool(win32api.GetAsyncKeyState(win32con.VK_MENU) & 0x8000)
-        elif key == "xbutton":
+        elif key == "xbutton1":
             return bool(win32api.GetAsyncKeyState(0x05) & 0x8000)
+        elif key == "xbutton2":
+            return bool(win32api.GetAsyncKeyState(0x06) & 0x8000)
+        elif key == "xbutton":
+            return bool(
+                win32api.GetAsyncKeyState(0x05) & 0x8000
+                or win32api.GetAsyncKeyState(0x06) & 0x8000
+            )
         return False
 
     def _handle_misplug(self, dev_name, reason):
@@ -1000,9 +1072,20 @@ class AimWindow(QMainWindow):
             self.display_fps = int(self._disp_count / (now - self._disp_time))
             self._disp_count = 0
             self._disp_time = now
-            self.lbl_fps.setText(f"FPS: {self.display_fps}")
             self.lbl_det.setText(f"检测: {det_fps}")
             self.lbl_targets.setText(f"目标: {len(targets)}")
+
+    def _update_ui_stats(self):
+        if not self.running:
+            return
+        with self.lock:
+            det_fps = self.detect_fps
+            targets_count = len(self.latest_targets)
+            
+        self.lbl_det.setText(f"检测: {det_fps}")
+        self.lbl_targets.setText(f"目标: {targets_count}")
+        if not config.SHOW_PREVIEW:
+            self.lbl_fps.setText("FPS: --")
 
     def _on_mouse_mode_changed(self, idx):
         modes = ["mouse", "kmbox_net", "kmbox_serial"]
@@ -1036,7 +1119,7 @@ class AimWindow(QMainWindow):
         self.kmbox_serial_widget.setVisible(mode == "kmbox_serial")
 
     def _on_trigger_changed(self, idx):
-        trigger_keys = ["right_mouse", "ctrl", "shift", "alt", "xbutton"]
+        trigger_keys = ["right_mouse", "ctrl", "shift", "alt", "xbutton1", "xbutton2"]
         if idx < len(trigger_keys):
             config.AIM_TRIGGER_KEY = trigger_keys[idx]
 
@@ -1109,7 +1192,7 @@ class AimWindow(QMainWindow):
             config.TARGET_CLASSES = class_map.get(config.TARGET_MODE, [0, 1])
 
     def _on_save_config(self):
-        trigger_keys = ["right_mouse", "ctrl", "shift", "alt", "xbutton"]
+        trigger_keys = ["right_mouse", "ctrl", "shift", "alt", "xbutton1", "xbutton2"]
         if self.combo_trigger.currentIndex() < len(trigger_keys):
             config.AIM_TRIGGER_KEY = trigger_keys[self.combo_trigger.currentIndex()]
         parts = ["head", "neck", "chest"]

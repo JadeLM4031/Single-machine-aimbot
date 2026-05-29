@@ -1,12 +1,12 @@
 {
-  "OBS_CAMERA_INDEX": 1,
+  "OBS_CAMERA_INDEX": 0,
   "DETECT_REGION": [
     0.15,
     0.22,
     0.72,
     0.72
   ],
-  "MODEL_PATH": "E:/Temp/aimbot/models/PUBGV8_320.onnx",
+  "MODEL_PATH": "E:/Temp/aimbot/models/PUBGV8_5w.pt",
   "CONFIDENCE_THRESHOLD": 0.5,
   "TARGET_CLASSES": [
     0,
@@ -18,11 +18,15 @@
   "KMBOX_MAC": "B7510C3D",
   "KMBOX_SERIAL_PORT": "COM3",
   "SMOOTH_FACTOR": 0.3,
-  "AIM_TRIGGER_KEY": "right_mouse",
+  "AIM_TRIGGER_KEY": "xbutton2",
   "AIM_PART": "head",
   "SHOW_PREVIEW": true,
   "SHOW_BBOX": true,
   "SHOW_CROSSHAIR": true,
   "SHOW_DETECT_REGION": true,
-  "SHOW_PERF": false
+  "SHOW_PERF": false,
+  "SOUND_ALERT": false,
+  "SOUND_FILE": "tool/tip.wav",
+  "MODEL_VERSION": "auto",
+  "TARGET_MODE": "enemy"
 }

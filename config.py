@@ -42,7 +42,7 @@ KMBOX_SERIAL_PORT = "COM3"
 # 移动平滑度（0.1~1.0）
 SMOOTH_FACTOR = 0.3
 
-# 瞄准触发键: "right_mouse" / "ctrl" / "shift" / "alt" / "xbutton"
+# 瞄准触发键: "right_mouse" / "ctrl" / "shift" / "alt" / "xbutton1" / "xbutton2"
 AIM_TRIGGER_KEY = "right_mouse"
 
 # 瞄准部位: "head" / "neck" / "chest"
@@ -59,6 +59,7 @@ SHOW_CROSSHAIR = True
 SHOW_DETECT_REGION = True
 SHOW_PERF = False
 SOUND_ALERT = False
+SOUND_FILE = "tool/tip.wav"
 
 # 窗口标题
 WINDOW_TITLE = "System Monitor"
@@ -84,7 +85,7 @@ def save_config():
         "SMOOTH_FACTOR", "AIM_TRIGGER_KEY", "AIM_PART",
         "SHOW_PREVIEW", "SHOW_BBOX", "SHOW_CROSSHAIR",
         "SHOW_DETECT_REGION", "SHOW_PERF", "SOUND_ALERT",
-        "MODEL_VERSION", "TARGET_MODE",
+        "SOUND_FILE", "MODEL_VERSION", "TARGET_MODE",
     ]
     data = {k: globals()[k] for k in keys}
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:

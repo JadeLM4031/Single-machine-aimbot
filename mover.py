@@ -140,6 +140,10 @@ class MouseController:
 
         self.ou_x = OUNoise(theta=0.25, mu=0.0, sigma=0.08)
         self.ou_y = OUNoise(theta=0.25, mu=0.0, sigma=0.08)
+        
+        # 浮点微位移残差累积器，用来消除极近距离或微小移动下的整型截断死区
+        self.residual_x = 0.0
+        self.residual_y = 0.0
 
     def connect(self):
         self.close()
@@ -149,6 +153,8 @@ class MouseController:
         self.pid_y.reset()
         self.ou_x.reset()
         self.ou_y.reset()
+        self.residual_x = 0.0
+        self.residual_y = 0.0
         self.last_pid_time = time.time()
         if self.mode == "mouse":
             config.log("[Output] Channel configuration completed (default)")
@@ -201,8 +207,16 @@ class MouseController:
                 elif move_y < 0 and move_y > -1.0:
                     move_y = -1.0
 
-        final_move_x = max(-100, min(100, int(move_x)))
-        final_move_y = max(-100, min(100, int(move_y)))
+        # 加上之前帧积累下来的浮点小数残差
+        total_move_x = move_x + self.residual_x
+        total_move_y = move_y + self.residual_y
+
+        final_move_x = max(-100, min(100, int(total_move_x)))
+        final_move_y = max(-100, min(100, int(total_move_y)))
+
+        # 记录本次整型移动截断后剩下的小数残差，供下一帧补偿
+        self.residual_x = total_move_x - final_move_x
+        self.residual_y = total_move_y - final_move_y
 
         if final_move_x == 0 and final_move_y == 0:
             return
@@ -320,6 +334,8 @@ class MouseController:
 
     def close(self):
         self._kmbox_net_ready = False
+        self.residual_x = 0.0
+        self.residual_y = 0.0
         if self._kmbox_serial_conn:
             try:
                 self._kmbox_serial_conn.close()
