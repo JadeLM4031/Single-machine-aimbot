@@ -18,10 +18,10 @@ class Detector:
         self.target_classes = config.TARGET_CLASSES
         self.detect_size = 320
         
-        # 🟢 【核心优化】：将 PyTorch 的 CUDA 显存强行截断在 15% 的硬限制下，并开启 CUDNN benchmark 自动优化最优硬件算法
+        # 🟢 【核心优化】：将 PyTorch 的 CUDA 显存强行截断在 40% 的硬限制下，并开启 CUDNN benchmark 自动优化最优硬件算法
         try:
             if torch.cuda.is_available():
-                torch.cuda.set_per_process_memory_fraction(0.15, 0)
+                torch.cuda.set_per_process_memory_fraction(0.40, 0)
                 torch.backends.cudnn.benchmark = True
                 torch.backends.cudnn.deterministic = False
         except Exception:

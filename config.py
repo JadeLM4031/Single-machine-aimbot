@@ -54,6 +54,7 @@ SHOW_BBOX = True
 SHOW_CROSSHAIR = True
 SHOW_DETECT_REGION = True
 SHOW_PERF = False
+SOUND_ALERT = False
 
 # 窗口标题
 WINDOW_TITLE = "System Monitor"
@@ -78,7 +79,7 @@ def save_config():
         "KMBOX_IP", "KMBOX_PORT", "KMBOX_MAC", "KMBOX_SERIAL_PORT",
         "SMOOTH_FACTOR", "AIM_TRIGGER_KEY", "AIM_PART",
         "SHOW_PREVIEW", "SHOW_BBOX", "SHOW_CROSSHAIR",
-        "SHOW_DETECT_REGION", "SHOW_PERF",
+        "SHOW_DETECT_REGION", "SHOW_PERF", "SOUND_ALERT",
     ]
     data = {k: globals()[k] for k in keys}
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:

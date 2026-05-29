@@ -190,6 +190,92 @@ class _LogBridge(QObject):
     log_signal = Signal(str)
 
 
+class SoundAlertManager:
+    """极速声呐声音提示管理器 - 独立后台线程运行，零阻塞自瞄检测"""
+
+    def __init__(self):
+        import queue
+        self.enabled = False
+        self.queue = queue.Queue(maxsize=1)  # 队列大小限制为 1，确保只播报最新状况，丢弃积压信号
+        self.last_count = 0
+        self.last_play_time = 0.0
+        self.cooldown = 1.0  # 1秒冷却，防止人数变动过于频繁时轰炸耳膜
+        
+        # 听觉去抖动滤波器缓存，防止识别框闪烁时播放“机关枪”重叠爆音
+        self.zero_since = 0.0
+        self.zero_grace = 0.150  # 150毫秒宽限去抖期
+        
+        self.running = True
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
+
+    def trigger(self, count):
+        """外部触发接口 - 零阻塞瞬间返回"""
+        if not self.enabled:
+            return
+        
+        now = time.time()
+        
+        if count > 0:
+            self.zero_since = 0.0  # 重置消失时间缓存
+            
+            # 只有当目标数量发生变化时，且从 0 到有或过了冷却时间
+            if count != self.last_count:
+                if now - self.last_play_time >= self.cooldown or self.last_count == 0:
+                    # 用非阻塞方式将最新状态塞入队列，如果满了则移出旧值并塞入最新值
+                    try:
+                        self.queue.put_nowait(count)
+                    except Exception:
+                        try:
+                            self.queue.get_nowait()
+                            self.queue.put_nowait(count)
+                        except Exception:
+                            pass
+        else:
+            # 当前帧没有任何目标 (count == 0)
+            if self.last_count > 0:
+                if self.zero_since == 0.0:
+                    self.zero_since = now  # 记录首次消失的时间戳
+                elif now - self.zero_since >= self.zero_grace:
+                    # 只有持续丢失目标超过 150 毫秒，才被认定为真正丢失，清空锁定记录并重置零锁
+                    self.last_count = 0
+                    self.zero_since = 0.0
+
+    def _worker(self):
+        import winsound
+        while self.running:
+            try:
+                # 阻塞式等待，直到队列中有新的目标数需要播报
+                count = self.queue.get(timeout=0.1)
+            except Exception:
+                continue
+
+            if not self.running:
+                break
+                
+            try:
+                # 根据目标数量播报专属声呐频率 (极速60ms单音，4个以上播放超短双音)
+                if count == 1:
+                    winsound.Beep(800, 60)
+                elif count == 2:
+                    winsound.Beep(1200, 60)
+                elif count == 3:
+                    winsound.Beep(1600, 60)
+                elif count >= 4:
+                    winsound.Beep(2000, 45)
+                    time.sleep(0.01)
+                    winsound.Beep(2000, 45)
+            except Exception:
+                pass
+
+            # 播报完成后更新状态
+            self.last_play_time = time.time()
+            self.last_count = count
+
+    def close(self):
+        self.running = False
+
+
 class AimWindow(QMainWindow):
     frame_ready = Signal(np.ndarray, list)
 
@@ -215,6 +301,8 @@ class AimWindow(QMainWindow):
         self.capture = OBSCapture()
         self.detector = Detector()
         self.mover = MouseController()
+        self.sound_manager = SoundAlertManager()
+        self.sound_manager.enabled = config.SOUND_ALERT
 
         self.running = False
         self.lock = threading.Lock()
@@ -473,12 +561,15 @@ class AimWindow(QMainWindow):
         self.chk_crosshair.setChecked(config.SHOW_CROSSHAIR)
         self.chk_perf = QCheckBox("性能统计")
         self.chk_perf.setChecked(config.SHOW_PERF)
+        self.chk_sound = QCheckBox("声音警报")
+        self.chk_sound.setChecked(config.SOUND_ALERT)
 
         for chk in [
             self.chk_preview,
             self.chk_bbox,
             self.chk_crosshair,
             self.chk_perf,
+            self.chk_sound,
         ]:
             display_layout.addWidget(chk)
         panel_layout.addWidget(display_group)
@@ -555,6 +646,7 @@ class AimWindow(QMainWindow):
             lambda v: setattr(config, "SHOW_CROSSHAIR", v)
         )
         self.chk_perf.toggled.connect(lambda v: setattr(config, "SHOW_PERF", v))
+        self.chk_sound.toggled.connect(self._on_sound_alert_toggled)
 
     def _on_log(self, line):
         self.log_lines.append(line)
@@ -566,6 +658,11 @@ class AimWindow(QMainWindow):
 
     def log(self, msg):
         config.log(msg)
+
+    def _on_sound_alert_toggled(self, checked):
+        config.SOUND_ALERT = checked
+        if hasattr(self, "sound_manager"):
+            self.sound_manager.enabled = checked
 
     def _toggle_run(self):
         if self.running:
@@ -702,6 +799,9 @@ class AimWindow(QMainWindow):
                     # UI 拿有加偏置的，自瞄用纯局部未污染坐标
                     self.latest_targets = targets_global
                     self.latest_targets_local = list(targets)
+
+                # 触发极速声呐声音提示 (零阻塞，异步发包)
+                self.sound_manager.trigger(len(targets))
 
                 self._det_count += 1
                 now = time.time()
@@ -1195,9 +1295,11 @@ class AimWindow(QMainWindow):
         config.KMBOX_PORT = self.edit_port.text()
         config.KMBOX_MAC = self.edit_mac.text()
         config.KMBOX_SERIAL_PORT = self.edit_serial.text()
+        config.SOUND_ALERT = self.chk_sound.isChecked()
         config.save_config()
         QMessageBox.information(self, "保存成功", "配置已保存到 config.json")
-
     def closeEvent(self, event):
         self._stop()
+        if hasattr(self, "sound_manager"):
+            self.sound_manager.close()
         event.accept()
