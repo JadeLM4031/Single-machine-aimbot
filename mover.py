@@ -105,6 +105,7 @@ class OUNoise:
     """Ornstein-Uhlenbeck 随机过程发生器
     用于完美模拟人类生理性肌肉微颤抖动 (具有均值回归特性，物理防封)
     """
+
     def __init__(self, theta=0.25, mu=0.0, sigma=0.35):
         self.theta = theta
         self.mu = mu
@@ -112,7 +113,6 @@ class OUNoise:
         self.state = 0.0
 
     def update(self):
-        # dx_t = -theta * (x_t - mu) + sigma * Gauss(0, 1)
         dx = -self.theta * (self.state - self.mu) + self.sigma * random.gauss(0, 1)
         self.state += dx
         return self.state
@@ -128,13 +128,11 @@ class MouseController:
         self._kmbox_serial_conn = None
         self._kmbox_net_ready = False
 
-        # 🟢 硬件优化：针对 KMBox 纯物理无软件加速的特性，上调 Kp (比例) 和 Kd (微分预测) 基础增益
-        # 使硬件的响应速度更快，拉枪更加灵敏，完美跟手
-        self.pid_x = PythonAdaptivePID(0.15, 0.0, 0.0025)
-        self.pid_y = PythonAdaptivePID(0.15, 0.0, 0.0025)
+        # 🟢 犀利修复：Kp(比例增益)调升至 0.28 磁性变强；Kd(微分刹车)调高到 0.0045，利用阻尼消除高频拉枪过头的剧烈抖动
+        self.pid_x = PythonAdaptivePID(0.28, 0.0, 0.0045)
+        self.pid_y = PythonAdaptivePID(0.28, 0.0, 0.0045)
         self.last_pid_time = time.time()
 
-        # 🟢 实例化 X 和 Y 通道的专属 OU 生理性微颤抖动发生器
         self.ou_x = OUNoise(theta=0.25, mu=0.0, sigma=0.35)
         self.ou_y = OUNoise(theta=0.25, mu=0.0, sigma=0.35)
 
@@ -167,34 +165,25 @@ class MouseController:
         self.connect()
 
     def move(self, dx, dy, target_w=80):
-        """核心重构：抛弃原本死板的循环步进，改用精准的 PID 时间差分计算"""
         now = time.time()
         dt = now - self.last_pid_time
         self.last_pid_time = now
 
-        # 1. 使用 PID 算出原始步长
         step_x = self.pid_x.update(dx, dt, target_w=target_w)
         step_y = self.pid_y.update(dy, dt, target_w=target_w)
 
-        # 2. 🟢 【手感核心放大】：KMBox 是物理外设，没有任何 Win 软件精度加速！
-        # 必须大幅度调高物理杠杆比例（由原 2.5 倍重度上调至 4.5 倍），以获得极强的物理磁性贴头吸附手感
-        move_x = step_x * self.smooth * 4.5
-        move_y = step_y * self.smooth * 4.5
+        # 🟢 犀利修复：杠杆乘数从激进的 4.5 倍理智回调至 2.8 倍，配合已经开大的 Kp，既有强吸附又彻底杜绝了网卡超时假死
+        move_x = step_x * self.smooth * 2.8
+        move_y = step_y * self.smooth * 2.8
 
-        # 计算误差的几何距离，判断是否已接近目标
         dist = math.sqrt(dx**2 + dy**2)
 
-        # 3. 🟢 自适应生理颤抖阻尼：根据与目标中心距离自适应调节生理颤抖噪声的强度
-        # 如果已经锁在目标中心附近（距离 < 6.0 像素），大幅收敛手抖幅度至 15%，防止准心在人脸中心剧烈微颤，但仍保留极微弱的真人肌肉低频微颤特征
         jitter_scale = 0.15 if dist < 6.0 else 1.0
         jitter_x = self.ou_x.update() * jitter_scale
         jitter_y = self.ou_y.update() * jitter_scale
         move_x += jitter_x
         move_y += jitter_y
 
-        # 4. 🟢 消除 1 像素物理强行进位（自适应物理进位保底）：
-        # 只有在距离较远（dist >= 6.0）且有实际运动意图（abs(step) > 0.05）时，才实施 1 像素物理推进保底
-        # 如果已经极度接近目标（dist < 6.0），绝对不进行强行保底，直接自然截断/常规转换，根除高频颤抖死穴！
         if dist >= 6.0:
             if abs(step_x) > 0.05:
                 if move_x > 0 and move_x < 1.0:
@@ -207,7 +196,6 @@ class MouseController:
                 elif move_y < 0 and move_y > -1.0:
                     move_y = -1.0
 
-        # 限制单次移动物理极限，防止瞬间瞬移被反作弊检测
         final_move_x = max(-100, min(100, int(move_x)))
         final_move_y = max(-100, min(100, int(move_y)))
 
@@ -230,14 +218,13 @@ class MouseController:
             self._click_kmbox_serial(button)
 
     def _move_mouse(self, dx, dy):
-        ctypes.windll.user32.mouse_event(0x0001, dx, dy, 0, 0)
+        if ctypes.windll.user32.mouse_event:
+            ctypes.windll.user32.mouse_event(0x0001, dx, dy, 0, 0)
 
     def _click_mouse(self, button="left"):
         if win32api is None or win32con is None:
             return
         x, y = win32api.GetCursorPos()
-        # 🟢 拟人化随机点击间隔 (模拟人类手指按压物理微动延迟)
-        # 高斯分布: 均值 70ms, 标准差 12ms, 且强制夹紧在 45ms 到 110ms 之间
         delay = max(0.045, min(0.110, random.normalvariate(0.070, 0.012)))
         if button == "left":
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
@@ -246,43 +233,41 @@ class MouseController:
 
     def _connect_kmbox_net(self):
         try:
-            # 支持 root 目录和 python_pyd 等各种路径形式的 kmNet.pyd 文件导入
             import kmNet
         except ImportError:
-            # 坚决不回退到 mouse 模式，保持 kmbox_net 状态并报出明确错误
             raise RuntimeError(
-                "找不到 kmNet 驱动文件。\n"
-                "请确保 'kmNet.cp310-win_amd64.pyd' 已经放置在项目根目录下！"
+                "找不到 kmNet 驱动文件。请确保 'kmNet.cp310-win_amd64.pyd' 已经放置在项目根目录下！"
             )
 
         ip = config.KMBOX_IP
         port = str(config.KMBOX_PORT)
         mac = config.KMBOX_MAC
 
-        config.log(f"[Output] 正在尝试连接 KMBox 网络版 (IP: {ip}, 端口: {port}, MAC/UUID: {mac})...")
-        
-        # 尝试进行硬件初始化
+        config.log(
+            f"[Output] 正在尝试连接 KMBox 网络版 (IP: {ip}, 端口: {port}, MAC/UUID: {mac})..."
+        )
+
         try:
             result = kmNet.init(ip, port, mac)
         except Exception as e:
-            raise RuntimeError(f"KMBox 硬件通讯发生严重异常异常: {e}")
+            raise RuntimeError(f"KMBox 硬件通讯发生严重异常: {e}")
 
         if result != 0:
             raise RuntimeError(
-                f"KMBox 网络初始化失败 (错误码: {result})。\n"
-                "请检查：1. 盒子屏幕显示的 IP/端口/MAC 是否完全一致；2. 电脑与盒子能否正常 ping 通。"
+                f"KMBox 网络初始化失败 (错误码: {result})。请检查硬件连接与参数配置。"
             )
 
         self._kmbox_net_ready = True
-        config.log("[Output] KMBox 硬件网络连接成功！已开启高隐蔽硬件级加密通讯通道 (enc_move)")
+        config.log(
+            "[Output] KMBox 硬件网络连接成功！已开启高隐蔽硬件级加密通讯通道 (enc_move)"
+        )
 
     def _move_kmbox_net(self, dx, dy):
         if not self._kmbox_net_ready:
-            # 严格防止在未就绪时误触发任何动作
             return
         import kmNet
+
         try:
-            # 🟢 终极隐蔽防封：使用加密防抓包特征扫描的 enc_move 硬件指令进行相对移动
             kmNet.enc_move(dx, dy)
         except Exception as e:
             config.log(f"[Warning] KMBox 发送移动指令失败: {e}")
@@ -291,8 +276,8 @@ class MouseController:
         if not self._kmbox_net_ready:
             return
         import kmNet
+
         try:
-            # 🟢 KMBox 网卡物理层模拟点击的高斯分布人类延迟
             delay = max(0.045, min(0.110, random.normalvariate(0.070, 0.012)))
             if button == "left":
                 kmNet.enc_left(1)
@@ -307,8 +292,9 @@ class MouseController:
 
     def _connect_kmbox_serial(self):
         if serial is None:
-            raise RuntimeError("找不到 pyserial 依赖库，请通过 pip install pyserial 安装")
-
+            raise RuntimeError(
+                "找不到 pyserial 依赖库，请通过 pip install pyserial 安装"
+            )
         self._kmbox_serial_conn = serial.Serial(
             config.KMBOX_SERIAL_PORT, 115200, timeout=1
         )
@@ -321,7 +307,6 @@ class MouseController:
     def _click_kmbox_serial(self, button="left"):
         if not self._kmbox_serial_conn:
             return
-        # 🟢 KMBox 串口协议的点击高斯分布人类延迟
         delay = max(0.045, min(0.110, random.normalvariate(0.070, 0.012)))
         if button == "left":
             self._kmbox_serial_conn.write(b"km.left_down()\r\n")
