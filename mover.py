@@ -75,8 +75,12 @@ class PythonAdaptivePID:
                 self.stable_count = 0
                 self.integral = 0
 
-        # 3. PID 核心计算
-        err_rate = (error - self.last_error) / dt_calc
+        # 3. PID 核心计算 - 引入微分项（D项）数字一阶低通滤波器，过滤 YOLO 高频神经抖动与开枪强震颤
+        raw_err_rate = (error - self.last_error) / dt_calc
+        if not hasattr(self, "_smoothed_err_rate"):
+            self._smoothed_err_rate = 0.0
+        self._smoothed_err_rate = 0.8 * self._smoothed_err_rate + 0.2 * raw_err_rate
+        err_rate = self._smoothed_err_rate
 
         if self.is_reached:
             self.integral += error * dt_calc
@@ -104,6 +108,8 @@ class PythonAdaptivePID:
         self.is_reached = False
         if hasattr(self, "_smoothed_dt"):
             delattr(self, "_smoothed_dt")
+        if hasattr(self, "_smoothed_err_rate"):
+            delattr(self, "_smoothed_err_rate")
 
 
 class OUNoise:
@@ -116,14 +122,19 @@ class OUNoise:
         self.mu = mu
         self.sigma = sigma
         self.state = 0.0
+        self.smoothed_state = 0.0
+        self.alpha = 0.06  # 🟢 强力低通平滑因子，剔除 330Hz 高频电控刺抖，重塑为柔和的 10Hz 生理震颤
 
     def update(self):
         dx = -self.theta * (self.state - self.mu) + self.sigma * random.gauss(0, 1)
         self.state += dx
-        return self.state
+        # 一阶低通滤波
+        self.smoothed_state = (1 - self.alpha) * self.smoothed_state + self.alpha * self.state
+        return self.smoothed_state
 
     def reset(self):
         self.state = 0.0
+        self.smoothed_state = 0.0
 
 
 class MouseController:

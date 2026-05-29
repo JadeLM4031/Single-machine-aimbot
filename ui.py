@@ -881,8 +881,9 @@ class AimWindow(QMainWindow):
                             self.last_target_center = target_to_track["center"]
                             self.last_target_time = now
 
-                        self.drift_x += -0.08 * self.drift_x + 0.25 * random.gauss(0, 1)
-                        self.drift_y += -0.08 * self.drift_y + 0.25 * random.gauss(0, 1)
+                        # 🟢 生理漂移低频化：限制随机步长的幅度，并引入极强的一阶低通平滑，使其从高频“刺”状抖动退变为极柔和的慢漂移
+                        self.drift_x += -0.05 * self.drift_x + 0.03 * random.gauss(0, 1)
+                        self.drift_y += -0.05 * self.drift_y + 0.03 * random.gauss(0, 1)
 
                         t_w = max(
                             1, target_to_track["bbox"][2] - target_to_track["bbox"][0]
